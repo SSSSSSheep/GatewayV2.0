@@ -6,12 +6,21 @@
 
 typedef enum
 {
-    HEX_DECODE_OK = 0,
-    HEX_DECODE_INVALID_ARGUMENT = -1,
-    HEX_DECODE_INVALID_TEXT = -2,
-    HEX_DECODE_NO_SPACE = -3
+    HEX_DECODE_OK = 0,                // 解码成功
+    HEX_DECODE_INVALID_ARGUMENT = -1, // 非法参数
+    HEX_DECODE_INVALID_TEXT = -2,     // 非法文本
+    HEX_DECODE_NO_SPACE = -3          // 空间不足
 } hex_decode_status_t;
 
+/**
+ * @brief 16进制字符串解码
+ * @param hex 16进制字符串
+ * @param hex_len 16进制字符串长度
+ * @param out 解码后的数据
+ * @param out_capacity out的容量
+ * @param out_len 解码后的数据长度
+ * @return hex_decode_status_t
+ */
 hex_decode_status_t hex_decode(const char *hex,
                                size_t hex_len,
                                uint8_t *out,

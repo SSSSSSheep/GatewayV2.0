@@ -165,3 +165,45 @@ add_test(
     NAME message_json
     COMMAND test_message_json
 )
+
+# --------------------------------------------------
+# Protocol library
+# --------------------------------------------------
+
+add_library(
+    gateway_protocol
+    STATIC
+        src/protocol/jdy_at.c
+)
+
+target_include_directories(
+    gateway_protocol
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(
+    gateway_protocol
+    PUBLIC
+        gateway_build_options
+)
+
+# --------------------------------------------------
+# JDY downlink encoding test
+# --------------------------------------------------
+
+add_executable(
+    test_jdy_at
+    tests/unit/test_jdy_at.c
+)
+
+target_link_libraries(
+    test_jdy_at
+    PRIVATE
+        gateway_protocol
+)
+
+add_test(
+    NAME jdy_at
+    COMMAND test_jdy_at
+)

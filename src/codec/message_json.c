@@ -1,6 +1,6 @@
-#include "../include/gateway/message_json.h"
-#include "../include/gateway/hex_decode.h"
-#include "../third_party/cJSON/cJSON.h"
+#include "gateway/message_json.h"
+#include "gateway/hex_decode.h"
+#include "cJSON.h"
 
 #include <string.h>
 
@@ -29,11 +29,11 @@ static int contains_escaped_nul(const char *text, size_t len)
     return 0;
 }
 
-message_json_status_t message_json_decode(const void *payload,
+message_json_status_t message_json_to_decode(const void *payload,
                                           size_t payload_len,
-                                          gateway_message_t *out)
+                                          gateway_message_t *out_msg)
 {
-    if (payload == NULL || out == NULL || payload_len == 0) {
+    if (payload == NULL || out_msg == NULL || payload_len == 0) {
         return MESSAGE_JSON_ERR_ARGUMENT;
     }
 
@@ -168,7 +168,7 @@ message_json_status_t message_json_decode(const void *payload,
     decoded.conn_type = 1;
 
     /* 全部校验成功后，才修改调用者的输出。 */
-    *out = decoded;
+    *out_msg = decoded;
     result = MESSAGE_JSON_OK;
 
 cleanup:

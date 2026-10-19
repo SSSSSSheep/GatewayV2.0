@@ -23,7 +23,7 @@ static int expect_error(const void *payload,
     memset(&out, 0xA5, sizeof(out));
     memcpy(before, &out, sizeof(out));
 
-    CHECK(message_json_decode(payload, len, &out) == expected);
+    CHECK(message_json_to_decode(payload, len, &out) == expected);
     CHECK(memcmp(before, &out, sizeof(out)) == 0);
 
     return 0;
@@ -37,7 +37,7 @@ int main(void)
     gateway_message_t out = {0};
 
     /* 正常消息 */
-    CHECK(message_json_decode(
+    CHECK(message_json_to_decode(
         valid, strlen(valid), &out) == MESSAGE_JSON_OK);
 
     CHECK(out.conn_type == 1);
@@ -50,14 +50,14 @@ int main(void)
     char raw[sizeof(valid) - 1];
     memcpy(raw, valid, sizeof(raw));
 
-    CHECK(message_json_decode(
+    CHECK(message_json_to_decode(
         raw, sizeof(raw), &out) == MESSAGE_JSON_OK);
 
     /* 字段顺序变化、大小写 HEX、二进制零 */
     const char binary[] =
         "{\"msg\":\"00aF\",\"id\":\"AbCd\",\"conn_type\":1}";
 
-    CHECK(message_json_decode(
+    CHECK(message_json_to_decode(
         binary, strlen(binary), &out) == MESSAGE_JSON_OK);
 
     CHECK(out.id[0] == 0xAB && out.id[1] == 0xCD);
@@ -69,7 +69,7 @@ int main(void)
         "{\"conn_type\":1,\"id\":\"0002\","
         "\"msg\":\"000102030405060708090A0B\"}";
 
-    CHECK(message_json_decode(
+    CHECK(message_json_to_decode(
         maximum, strlen(maximum), &out) == MESSAGE_JSON_OK);
 
     CHECK(out.msg_len == GATEWAY_MAX_MSG_SIZE);
@@ -79,7 +79,7 @@ int main(void)
     const char whitespace[] =
         "{\"conn_type\":1,\"id\":\"0002\",\"msg\":\"31\"}\r\n";
 
-    CHECK(message_json_decode(
+    CHECK(message_json_to_decode(
         whitespace, strlen(whitespace), &out) == MESSAGE_JSON_OK);
 
     struct {
@@ -168,7 +168,7 @@ int main(void)
     CHECK(expect_error(
         valid, 0, MESSAGE_JSON_ERR_ARGUMENT) == 0);
 
-    CHECK(message_json_decode(
+    CHECK(message_json_to_decode(
         valid, strlen(valid), NULL) == MESSAGE_JSON_ERR_ARGUMENT);
 
     /* 输入超过 JSON 总长度上限 */
@@ -195,7 +195,7 @@ int main(void)
 
     /* 重复成功和失败路径，配合 LeakSanitizer 检查释放。 */
     for (int i = 0; i < 1000; ++i) {
-        CHECK(message_json_decode(
+        CHECK(message_json_to_decode(
             valid, strlen(valid), &out) == MESSAGE_JSON_OK);
 
         const char missing[] = "{\"conn_type\":1}";
