@@ -63,7 +63,7 @@ add_test(
     COMMAND test_smoke
 )
 
-# ========= 新增的 hex_decode 模块 =========
+# ========= hex_decode 模块 =========
 add_library(
     gateway_codec
     STATIC

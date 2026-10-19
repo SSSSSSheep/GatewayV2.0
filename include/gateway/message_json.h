@@ -4,8 +4,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// ID 的最大长度
 #define GATEWAY_ID_SIZE 2
+// 消息的最大长度
 #define GATEWAY_MAX_MSG_SIZE 12
+// 消息的最大 JSON 长度
 #define GATEWAY_MAX_JSON_SIZE 512
 
 // 网关消息结构体，用于存储解码后的 JSON 数据

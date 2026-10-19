@@ -2,22 +2,39 @@
 
 #include <string.h>
 
+/*
+  内部结构体（gateway_message_t）示例:
+    conn_type: 1
+    id:        00 02
+    msg_len:   1
+    msg:       31
+
+  输出蓝牙数据格式（本例16字节）:
+ [0~6]     [7]   [8~9]   [10~11] [12]   [13]     [14~15]
+ AT+MESH   00    00 02   01 01   01     31       0D 0A
+ 头部      CMD   目标    源地址  长度   业务数据   CRLF
+
+ 源地址、长度为自定义业务头；总长度为15 + msg_len。
+ */
 jdy_at_status_t jdy_at_build(const gateway_message_t *msg,
                              uint8_t *out,
                              size_t out_capacity,
                              size_t *out_len)
 {
-    if (out_len == NULL) {
+    if (out_len == NULL)
+    {
         return JDY_AT_ERR_ARGUMENT;
     }
 
     *out_len = 0;
 
-    if (msg == NULL || out == NULL) {
+    if (msg == NULL || out == NULL)
+    {
         return JDY_AT_ERR_ARGUMENT;
     }
 
-    if (msg->conn_type != 1) {
+    if (msg->conn_type != 1)
+    {
         return JDY_AT_ERR_TYPE;
     }
 
@@ -26,14 +43,16 @@ jdy_at_status_t jdy_at_build(const gateway_message_t *msg,
      * 不能先复制再检查。
      */
     if (msg->msg_len == 0 ||
-        msg->msg_len > sizeof(msg->msg)) {
+        msg->msg_len > sizeof(msg->msg))
+    {
         return JDY_AT_ERR_LENGTH;
     }
 
     const size_t required =
         JDY_AT_FIXED_SIZE + msg->msg_len;
 
-    if (required > out_capacity) {
+    if (required > out_capacity)
+    {
         return JDY_AT_ERR_NO_SPACE;
     }
 

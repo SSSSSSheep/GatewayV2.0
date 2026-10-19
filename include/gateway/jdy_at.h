@@ -34,7 +34,12 @@ typedef enum
  */
 
 /**
- * @brief
+ * @brief 将消息编码为 AT+MESH 命令。
+ * @param msg 已经解码的内部消息。
+ * @param out 调用者提供的输出缓冲区。
+ * @param out_capacity out 的实际容量。
+ * @param out_len 成功时返回命令长度；失败时为0。
+ * @return jdy_at_status_t
  */
 jdy_at_status_t jdy_at_build(const gateway_message_t *msg,
                              uint8_t *out,
