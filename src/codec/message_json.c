@@ -10,7 +10,7 @@
  */
 static int contains_escaped_nul(const char *text, size_t len)
 {
-    for (size_t i = 0; i < len; ++i)
+    for (size_t i = 0; i < len; i++)
     {
         // 跳过非反斜杠字符。
         if (text[i] != '\\')
@@ -28,7 +28,7 @@ static int contains_escaped_nul(const char *text, size_t len)
         /* 跳过被转义的字符，包括转义反斜杠。 */
         if (i + 1 < len)
         {
-            ++i;
+            i++;
         }
     }
 

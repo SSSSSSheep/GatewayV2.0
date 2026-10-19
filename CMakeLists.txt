@@ -207,3 +207,49 @@ add_test(
     NAME jdy_at
     COMMAND test_jdy_at
 )
+
+target_sources(gateway_protocol
+    PRIVATE
+        src/protocol/jdy_parser.c
+)
+
+add_executable(test_jdy_parser
+    tests/unit/test_jdy_parser.c
+)
+
+target_link_libraries(test_jdy_parser
+    PRIVATE
+        gateway_protocol
+)
+
+add_test(NAME jdy_parser COMMAND test_jdy_parser)
+
+add_executable(main_demo
+    src/main_demo.c
+)
+
+target_link_libraries(main_demo
+    PRIVATE
+        gateway_codec
+        gateway_protocol
+        gateway_build_options
+)
+
+add_library(gateway_device STATIC
+    src/device/serial.c
+)
+
+target_include_directories(gateway_device
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(gateway_device
+    PUBLIC
+        gateway_build_options
+)
+
+target_link_libraries(main_demo
+    PRIVATE
+        gateway_device
+)
