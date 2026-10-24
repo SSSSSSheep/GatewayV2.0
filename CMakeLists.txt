@@ -237,6 +237,7 @@ target_link_libraries(main_demo
 
 add_library(gateway_device STATIC
     src/device/serial.c
+    src/device/mqtt.c
 )
 
 target_include_directories(gateway_device
@@ -257,4 +258,27 @@ target_link_libraries(main_demo
 target_sources(main_demo
     PRIVATE
         src/runtime/io_loop.c
+)
+
+find_path(PAHO_INCLUDE_DIR
+    NAMES MQTTClient.h
+    PATHS /usr/local/include
+    REQUIRED
+)
+
+find_library(PAHO_MQTT3C_LIBRARY
+    NAMES paho-mqtt3c
+    PATHS /usr/local/lib
+    REQUIRED
+)
+
+target_include_directories(gateway_device
+    PRIVATE
+        ${PAHO_INCLUDE_DIR}
+)
+
+target_link_libraries(gateway_device
+    PUBLIC
+        gateway_build_options
+        ${PAHO_MQTT3C_LIBRARY}
 )

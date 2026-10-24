@@ -1,141 +1,138 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <unistd.h>
 
 #include "gateway/message_json.h"
 #include "gateway/serial.h"
 #include "gateway/jdy_at.h"
-#include "gateway/io_loop.h"
+#include "gateway/mqtt.h"
 
 int main(void)
 {
     /*
-    JSON -> 内部消息:
-    conn_type:1
-    id:"0002"->00 02
-    msg:"31"->31
-    msg_len:1
-    */
-
-    const char json[] = "{\"conn_type\":1,\"id\":\"0002\",\"msg\":\"31\"}";
+     * 这条JSON只用于启动前展示解码和组包结果。
+     * 真正的下行消息由MQTT主题 gateway/down 接收。
+     */
+    const char json[] =
+        "{\"conn_type\":1,\"id\":\"0002\",\"msg\":\"31\"}";
 
     gateway_message_t message = {0};
     uint8_t packet[64] = {0};
     size_t packet_len = 0;
 
-    printf("==== 1. 输入JSON ====\n");
+    printf("=== 1. 输入JSON ===\n");
     printf("%s\n", json);
 
-    int result = message_json_to_decode(json, sizeof(json) - 1, &message);
+    int result = message_json_to_decode(
+        json,
+        sizeof(json) - 1,
+        &message);
 
-    // 失败时打印并停止，避免继续使用无效结果
     if (result != 0)
     {
-        fprintf(stderr, "JSON解析失败: %d\n", result);
+        fprintf(stderr, "JSON解析失败：%d\n", result);
         return 1;
     }
 
-    printf("==== 2. JSON -> 内部消息 ====\n");
-    printf("conn_type: %d\n", message.conn_type);
+    printf("=== 2. JSON -> 内部消息 ===\n");
+    printf("conn_type = %u\n", (unsigned int)message.conn_type);
+
     printf("id        = %02X %02X\n",
            (unsigned int)message.id[0],
            (unsigned int)message.id[1]);
-    printf("msg_len = %zu\n", (size_t)message.msg_len);
 
-    printf("msg = ");
+    printf("msg_len   = %zu\n",
+           message.msg_len);
+
+    printf("msg       =");
+
     for (size_t i = 0; i < message.msg_len; i++)
     {
-        printf("%02X ", (unsigned int)message.msg[i]);
+        printf(" %02X", (unsigned int)message.msg[i]);
     }
+
     printf("\n");
 
-    /*
-     * 当前示例输出，共 16 字节：
-     *
-     * [0~6]   [7]  [8~9] [10~11] [12] [13] [14~15]
-     * AT+MESH  00   00 02  01 01   01   31   0D 0A
-     * 头部     CMD  目标   源地址  长度 数据 CRLF
-     */
     result = jdy_at_build(
         &message,
         packet,
         sizeof(packet),
         &packet_len);
 
-    if (result != 0)
+    if (result != JDY_AT_OK)
     {
-        fprintf(stderr, "JDY 组包失败，错误码：%d\n", result);
+        fprintf(stderr, "JDY组包失败：%d\n", result);
         return 1;
     }
 
-    printf("=== 3. 蓝牙指令 ===\n");
+    printf("=== 3. 蓝牙指令示例 ===\n");
     printf("packet_len = %zu\n", packet_len);
     printf("HEX        =");
 
-    for (size_t i = 0; i < packet_len; ++i)
+    for (size_t i = 0; i < packet_len; i++)
     {
         printf(" %02X", (unsigned int)packet[i]);
     }
-    printf("\n\n");
 
-    printf("=== 4. 当前示例的字节位置图 ===\n");
+    printf("\n");
     printf("[0~6]   [7]  [8~9] [10~11] [12] [13] [14~15]\n");
     printf("AT+MESH  00   00 02  01 01   01   31   0D 0A\n");
-    printf("Header  CMD  DST    SRC     LEN  DATA CRLF\n");
+    printf("头部     CMD  目标   源地址  长度 消息体 CRLF\n");
 
     /*
-     * packet 中是原始字节，不是 HEX 字符串：
-     *
-     * [0~6]   [7]  [8~9] [10~11] [12] [13] [14~15]
-     * AT+MESH  00   00 02  01 01   01   31   0D 0A
-     *
-     * write() 直接发送 packet_len 个字节，包括其中的 00。
+     * PC测试使用socat创建的虚拟串口。
+     * 上板时改为RK3568实际设备，例如 /dev/ttyS3。
      */
     const char *serial_path = "/tmp/rk_gateway";
-    // RK3568 的 UART3 请改为 "/dev/ttyS3"。
 
-    printf("=== 4. 打开真实串口 ===\n");
+    printf("=== 4. 打开串口 ===\n");
     printf("设备：%s，115200 8N1\n", serial_path);
 
     int fd = serial_open(serial_path);
+
     if (fd < 0)
     {
         return 1;
     }
 
-    printf("\n=== 5. 发送蓝牙指令 ===\n");
+    /*
+     * 当前阶段不在这里发送固定packet。
+     * 所有真正的下行数据都由MQTT回调接收后组包并发送。
+     */
+    gateway_mqtt_config_t mqtt_config = {
+        .broker_address = "tcp://192.168.0.101:1883",
+        .client_id = "rk_gateway_v2_pc",
+        .topic = "gateway/down",
+        .serial_fd = fd};
 
-    ssize_t written = serial_write(fd, packet, packet_len);
-
-    if (written < 0)
+    if (gateway_mqtt_start(&mqtt_config) != 0)
     {
-        perror("serial_write");
+        fprintf(stderr, "MQTT启动失败\n");
         serial_close(fd);
         return 1;
     }
 
-    printf("write 返回：%zd，期望：%zu\n", written, packet_len);
-
-    // 本次先报告短写，不增加发送队列和重试机制。
-    if ((size_t)written != packet_len)
-    {
-        fprintf(stderr, "本次未写完全部数据，停止演示\n");
-        serial_close(fd);
-        return 1;
-    }
-
-    printf("\n=== 6. 进入事件循环，等待完整帧 ===\n");
+    printf("=== 5. 等待MQTT下行消息 ===\n");
+    printf("主题：gateway/down\n");
+    printf("按 Ctrl+C 结束程序。\n");
     fflush(stdout);
 
-    int loop_result = io_loop_run(fd);
-
-    serial_close(fd);
-
-    if (loop_result != 0)
+    /*
+     * Paho MQTTClient会在内部线程中接收消息并执行回调。
+     * 主线程必须保持运行，否则进程退出，MQTT连接也会结束。
+     */
+    while (1)
     {
-        return 1;
+        sleep(1);
     }
 
-    printf("事件循环结束，演示结束。\n");
+    /*
+     * 当前无限循环不会自然到达这里。
+     * 后续加入信号处理后，再在退出路径调用：
+     *
+     * gateway_mqtt_stop();
+     * serial_close(fd);
+     */
     return 0;
 }
