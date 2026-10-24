@@ -5,6 +5,7 @@
 #include "gateway/message_json.h"
 #include "gateway/serial.h"
 #include "gateway/jdy_at.h"
+#include "gateway/io_loop.h"
 
 int main(void)
 {
@@ -82,7 +83,7 @@ int main(void)
     printf("AT+MESH  00   00 02  01 01   01   31   0D 0A\n");
     printf("Header  CMD  DST    SRC     LEN  DATA CRLF\n");
 
-        /*
+    /*
      * packet 中是原始字节，不是 HEX 字符串：
      *
      * [0~6]   [7]  [8~9] [10~11] [12] [13] [14~15]
@@ -123,35 +124,18 @@ int main(void)
         return 1;
     }
 
-    printf("\n=== 6. 阻塞等待串口返回 ===\n");
-    printf("没有数据时会停在这里，可按 Ctrl+C 结束。\n");
+    printf("\n=== 6. 进入事件循环，等待完整帧 ===\n");
     fflush(stdout);
 
-    uint8_t rx_buffer[128];
-    ssize_t received = serial_read(fd, rx_buffer, sizeof(rx_buffer));
+    int loop_result = io_loop_run(fd);
 
-    if (received < 0)
+    serial_close(fd);
+
+    if (loop_result != 0)
     {
-        perror("serial_read");
-        serial_close(fd);
         return 1;
     }
 
-    printf("read 返回：%zd 字节\n", received);
-    printf("RX HEX =");
-
-    for (size_t i = 0; i < (size_t)received; ++i)
-    {
-        printf(" %02X", (unsigned int)rx_buffer[i]);
-    }
-    printf("\n");
-
-    if (serial_close(fd) < 0)
-    {
-        perror("serial_close");
-        return 1;
-    }
-
-    printf("串口已关闭，演示结束。\n");
+    printf("事件循环结束，演示结束。\n");
     return 0;
 }

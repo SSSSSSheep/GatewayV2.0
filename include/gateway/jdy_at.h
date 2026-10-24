@@ -6,17 +6,24 @@
 
 #include "gateway/message_json.h"
 
+/**蓝牙数据固定头
+ * 固定开销：AT+MESH(7) + CMD(1) + 目标地址(2)
+ *          + 源地址(2) + 数据长度(1) + CRLF(2) = 15 字节。
+ * 实际整包长度 = 15 + msg_len；例如业务数据 1 字节时，整包为 16 字节。
+ */
 #define JDY_AT_FIXED_SIZE 15
+// AT+MESH 命令最大长度
 #define JDY_AT_MAX_SIZE \
     (JDY_AT_FIXED_SIZE + GATEWAY_MAX_MSG_SIZE)
 
+// 蓝牙状态机
 typedef enum
 {
-    JDY_AT_OK = 0,
-    JDY_AT_ERR_ARGUMENT = -1,
-    JDY_AT_ERR_TYPE = -2,
-    JDY_AT_ERR_LENGTH = -3,
-    JDY_AT_ERR_NO_SPACE = -4
+    JDY_AT_OK = 0,            // 组包成功 输出数组和输出长度有效
+    JDY_AT_ERR_ARGUMENT = -1, // 参数错误
+    JDY_AT_ERR_TYPE = -2,     // 连接类型错误
+    JDY_AT_ERR_LENGTH = -3,   // 消息长度不符合组包要求
+    JDY_AT_ERR_NO_SPACE = -4  // 输出数组容量不足 放不下完整指令
 } jdy_at_status_t;
 
 /*

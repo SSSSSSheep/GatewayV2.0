@@ -21,6 +21,8 @@ jdy_at_status_t jdy_at_build(const gateway_message_t *msg,
                              size_t out_capacity,
                              size_t *out_len)
 {
+
+    // 参数校验
     if (out_len == NULL)
     {
         return JDY_AT_ERR_ARGUMENT;

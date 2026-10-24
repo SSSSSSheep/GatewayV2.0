@@ -253,3 +253,8 @@ target_link_libraries(main_demo
     PRIVATE
         gateway_device
 )
+
+target_sources(main_demo
+    PRIVATE
+        src/runtime/io_loop.c
+)
