@@ -3,6 +3,7 @@
 #include "cJSON.h"
 
 #include <string.h>
+#include <stdio.h>
 
 /*
  * cJSON 用 NUL 结尾的 C 字符串保存文本。
@@ -235,4 +236,91 @@ message_json_status_t message_json_to_decode(const void *payload,
 cleanup:
     cJSON_Delete(root);
     return result;
+}
+
+/*
+ * 输入：
+ *   conn_type = 1
+ *   id        = 23 23
+ *   msg_len   = 3
+ *   msg       = 41 42 43
+ *
+ * 输出：
+ *   {"conn_type":1,"id":"2323","msg":"414243"}
+ */
+message_json_status_t message_json_to_encode(const gateway_message_t *message, char *out_json, size_t out_capacity, size_t *out_len)
+{
+    // 创建 JSON 文本
+    char encoded[GATEWAY_MAX_JSON_SIZE] = {0};
+    // JSON 文本偏移量
+    size_t offset = 0;
+    // JSON 文本写入长度
+    int written = 0;
+
+    // 参数校验
+    if (message == NULL || out_json == NULL || out_len == NULL)
+    {
+        return MESSAGE_JSON_ERR_ARGUMENT;
+    }
+
+    // 目前仅支持 conn_type = 1
+    if (message->conn_type != 1)
+    {
+        return MESSAGE_JSON_ERR_TYPE;
+    }
+
+    // ID 长度
+    if (message->msg_len == 0 || message->msg_len > GATEWAY_MAX_MSG_SIZE)
+    {
+        return MESSAGE_JSON_ERR_RANGE;
+    }
+
+    // 输出容量
+    *out_len = 0;
+
+    // JSON 文本编码 连接类型 id
+    written = snprintf(encoded + offset, sizeof(encoded) - offset,
+                       "{\"conn_type\":%u,\"id\":\"%02X%02X\",\"msg\":\"",
+                       (unsigned int)message->conn_type,
+                       (unsigned int)message->id[0],
+                       (unsigned int)message->id[1]);
+
+    // 后移json文本偏移量
+    if (written < 0 || (size_t)written >= sizeof(encoded) - offset)
+    {
+        return MESSAGE_JSON_ERR_JSON;
+    }
+
+    offset += (size_t)written;
+
+    // JSON 文本编码 消息内容
+    for (size_t i = 0; i < message->msg_len; i++)
+    {
+        // 取出当前字节的高四位
+        encoded[offset] = "0123456789ABCDEF"[message->msg[i] >> 4];
+        // 取出当前字节的低四位
+        encoded[offset + 1U] = "0123456789ABCDEF"[message->msg[i] & 0x0FU];
+        offset += 2U;
+    }
+
+    // 补充 }
+    written = snprintf(encoded + offset, sizeof(encoded) - offset, "\"}");
+
+    // 检查 snprintf 返回值 与 剩余空间容量是否匹配
+    if (written < 0 || (size_t)written >= sizeof(encoded) - offset)
+    {
+        return MESSAGE_JSON_ERR_JSON;
+    }
+
+    offset += (size_t)written;
+
+    if (out_capacity <= offset)
+    {
+        return MESSAGE_JSON_ERR_TOO_LARGE;
+    }
+
+    memcpy(out_json, encoded, offset + 1);
+    *out_len = offset;
+
+    return MESSAGE_JSON_OK;
 }

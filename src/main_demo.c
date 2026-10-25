@@ -7,6 +7,7 @@
 #include "gateway/serial.h"
 #include "gateway/jdy_at.h"
 #include "gateway/mqtt.h"
+#include "gateway/io_loop.h"
 
 int main(void)
 {
@@ -104,6 +105,7 @@ int main(void)
         .broker_address = "tcp://192.168.0.101:1883",
         .client_id = "rk_gateway_v2_pc",
         .topic = "gateway/down",
+        .up_topic = "gateway/up",
         .serial_fd = fd};
 
     if (gateway_mqtt_start(&mqtt_config) != 0)
@@ -118,21 +120,16 @@ int main(void)
     printf("按 Ctrl+C 结束程序。\n");
     fflush(stdout);
 
-    /*
-     * Paho MQTTClient会在内部线程中接收消息并执行回调。
-     * 主线程必须保持运行，否则进程退出，MQTT连接也会结束。
-     */
-    while (1)
+    printf("进入串口事件循环，等待上行数据...\n");
+
+    if (io_loop_run(fd) != 0)
     {
-        sleep(1);
+        gateway_mqtt_stop();
+        serial_close(fd);
+        return 1;
     }
 
-    /*
-     * 当前无限循环不会自然到达这里。
-     * 后续加入信号处理后，再在退出路径调用：
-     *
-     * gateway_mqtt_stop();
-     * serial_close(fd);
-     */
+    gateway_mqtt_stop();
+    serial_close(fd);
     return 0;
 }

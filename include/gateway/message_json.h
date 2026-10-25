@@ -59,4 +59,17 @@ message_json_status_t message_json_to_decode(const void *payload,
                                              size_t payload_len,
                                              gateway_message_t *out_msg);
 
+/**
+ * @brief 将 gateway_message_t 编码为 JSON。
+ * @param message 消息。
+ * @param out_json 编码结果。
+ * @param out_capacity 编码结果容量。
+ * @param out_len 编码结果长度。
+ * @return 编码状态。
+ */
+message_json_status_t message_json_to_encode(const gateway_message_t *message,
+                                             char *out_json,
+                                             size_t out_capacity,
+                                             size_t *out_len);
+
 #endif // GATEWAY_MESSAGE_JSON_H

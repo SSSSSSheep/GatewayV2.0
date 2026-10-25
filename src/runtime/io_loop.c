@@ -1,10 +1,14 @@
 #include "gateway/jdy_parser.h"
 #include "gateway/io_loop.h"
+#include "gateway/message_json.h"
+#include "gateway/mqtt.h"
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <sys/epoll.h>
 #include <unistd.h>
+#include <string.h>
 
 #define IO_LOOP_MAX_EVENTS 1  // 最多处理一个事件
 #define IO_LOOP_READ_SIZE 128 // 每次读取的最大字节数
@@ -80,7 +84,6 @@ int io_loop_run(int serial_fd)
             return -1;
         }
 
-        
         if ((events[0].events & EPOLLIN) == 0)
         {
             // 没有事件发生 继续
@@ -98,7 +101,7 @@ int io_loop_run(int serial_fd)
             if (read_len < 0)
             {
                 // errno = EAGIN 或 EWOULDBLOCK，说明不是read失败
-	            // 而是read在以非阻塞方式读一个设备文件/网络文件，并且文件无数据
+                // 而是read在以非阻塞方式读一个设备文件/网络文件，并且文件无数据
                 if (errno == EAGAIN || errno == EWOULDBLOCK)
                 {
                     break;
@@ -139,6 +142,20 @@ int io_loop_run(int serial_fd)
 
                 if (parse_status == JDY_PARSER_OK)
                 {
+                    // 发布上行消息
+                    gateway_message_t message = {0};
+                    message.conn_type = 1;
+                    // 设置消息ID
+                    memcpy(message.id, frame.source, JDY_ADDRESS_SIZE);
+                    // 设置消息体
+                    memcpy(message.msg, frame.payload, frame.payload_len);
+
+                    message.msg_len = frame.payload_len;
+                    if (gateway_mqtt_publish_up(&message) != 0)
+                    {
+                        fprintf(stderr, "串口帧上行发布失败\n");
+                    }
+
                     printf("成功解析出一帧！消息体长度: %zu\n", frame.payload_len);
                     continue; // 检查缓存种是否还有下一帧
                 }

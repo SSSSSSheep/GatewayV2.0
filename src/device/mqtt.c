@@ -14,6 +14,8 @@ static MQTTClient mqtt_client;  // MQTT客户端句柄
 static int mqtt_serial_fd = -1; // 串口文件描述符
 static int mqtt_started = 0;    // MQTT是否已经启动
 
+static const char *mqtt_up_topic = NULL; // MQTT上行主题
+
 /**
  * @brief MQTT连接回调函数
  * @param context 上下文
@@ -130,12 +132,14 @@ int gateway_mqtt_start(const gateway_mqtt_config_t *config)
         config->broker_address == NULL ||
         config->client_id == NULL ||
         config->topic == NULL ||
+        config->up_topic == NULL ||
         config->serial_fd < 0)
     {
         return -1;
     }
 
     mqtt_serial_fd = config->serial_fd;
+    mqtt_up_topic = config->up_topic;
 
     // 初始化MQTT客户端
     int status = MQTTClient_create(&mqtt_client,
@@ -190,6 +194,8 @@ int gateway_mqtt_start(const gateway_mqtt_config_t *config)
         MQTTClient_destroy(&mqtt_client);
         return -1;
     }
+
+    mqtt_started = 1;
     return 0;
 }
 
@@ -205,4 +211,44 @@ void gateway_mqtt_stop(void)
 
     mqtt_serial_fd = -1;
     mqtt_started = 0;
+}
+
+int gateway_mqtt_publish_up(const gateway_message_t *message)
+{
+    // json编码
+    char json[GATEWAY_MAX_JSON_SIZE] = {0};
+    size_t json_len = 0;
+    MQTTClient_message mqtt_message = MQTTClient_message_initializer;
+    int status = 0;
+
+    // 判断是否已经启动
+    if (!mqtt_started || message == NULL || mqtt_up_topic == NULL)
+    {
+        return -1;
+    }
+
+    // 将下位机返回的指令解码 -> json
+    if (message_json_to_encode(message, json, sizeof(json), &json_len) != MESSAGE_JSON_OK)
+    {
+        fprintf(stderr, "上行JSON编码失败\n");
+        return -1;
+    }
+
+    // 设置MQTT消息
+    mqtt_message.payload = json;
+    mqtt_message.payloadlen = (int)json_len;
+    mqtt_message.qos = GATEWAY_MQTT_QOS;
+    mqtt_message.retained = 0; // 设置消息是否保留
+
+    // 发布MQTT消息
+    status = MQTTClient_publishMessage(mqtt_client, mqtt_up_topic, &mqtt_message, NULL);
+
+    if (status != MQTTCLIENT_SUCCESS)
+    {
+        fprintf(stderr, "MQTT 上行发布失败：%d\n", status);
+        return -1;
+    }
+
+    printf("MQTT 上行发布：%.*s\n", (int)json_len, json);
+    return 0;
 }

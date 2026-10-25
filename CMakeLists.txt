@@ -282,3 +282,19 @@ target_link_libraries(gateway_device
         gateway_build_options
         ${PAHO_MQTT3C_LIBRARY}
 )
+
+add_executable(
+    test_message_json_encode
+    tests/unit/test_message_json_encode.c
+)
+
+target_link_libraries(
+    test_message_json_encode
+    PRIVATE
+        gateway_codec
+)
+
+add_test(
+    NAME message_json_encode
+    COMMAND test_message_json_encode
+)
