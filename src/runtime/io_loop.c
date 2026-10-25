@@ -142,22 +142,39 @@ int io_loop_run(int serial_fd)
 
                 if (parse_status == JDY_PARSER_OK)
                 {
-                    // 发布上行消息
                     gateway_message_t message = {0};
-                    message.conn_type = 1;
-                    // 设置消息ID
-                    memcpy(message.id, frame.source, JDY_ADDRESS_SIZE);
-                    // 设置消息体
-                    memcpy(message.msg, frame.payload, frame.payload_len);
+                    const size_t message_header_len =
+                        JDY_ADDRESS_SIZE + 1U;
 
-                    message.msg_len = frame.payload_len;
+                    message.conn_type = 1;
+                    memcpy(message.id, frame.source, JDY_ADDRESS_SIZE);
+
+                    if (frame.payload_len <= message_header_len ||
+                        memcmp(frame.payload, frame.source,
+                               JDY_ADDRESS_SIZE) != 0 ||
+                        (size_t)frame.payload[JDY_ADDRESS_SIZE] !=
+                            frame.payload_len - message_header_len ||
+                        frame.payload_len - message_header_len >
+                            sizeof(message.msg))
+                    {
+                        fprintf(stderr, "STM32消息格式错误\n");
+                        continue;
+                    }
+
+                    message.msg_len =
+                        frame.payload_len - message_header_len;
+                    memcpy(message.msg,
+                           frame.payload + message_header_len,
+                           message.msg_len);
+
                     if (gateway_mqtt_publish_up(&message) != 0)
                     {
                         fprintf(stderr, "串口帧上行发布失败\n");
                     }
 
-                    printf("成功解析出一帧！消息体长度: %zu\n", frame.payload_len);
-                    continue; // 检查缓存种是否还有下一帧
+                    printf("成功解析出一帧！消息体长度: %zu\n",
+                           message.msg_len);
+                    continue;
                 }
 
                 if (parse_status == JDY_PARSER_NEED_MORE)

@@ -85,7 +85,7 @@ int main(void)
      * PC测试使用socat创建的虚拟串口。
      * 上板时改为RK3568实际设备，例如 /dev/ttyS3。
      */
-    const char *serial_path = "/tmp/rk_gateway";
+    const char *serial_path = "/dev/ttyS3";
 
     printf("=== 4. 打开串口 ===\n");
     printf("设备：%s，115200 8N1\n", serial_path);
