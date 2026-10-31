@@ -6,6 +6,7 @@
 #include <MQTTClient.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 #include <errno.h>
 #include <pthread.h>
 
@@ -34,6 +35,7 @@ static int mqtt_serial_fd = -1; // 串口文件描述符
 static int mqtt_started = 0;    // MQTT是否已经启动
 
 static const char *mqtt_up_topic = NULL;         // MQTT上行主题
+static const char *mqtt_down_topic = NULL;
 static gateway_serial_tx_queue_t *mqtt_tx_queue; // 串口发送队列，承接 MQTT 下行指令。
 
 /**
@@ -206,6 +208,7 @@ int gateway_mqtt_start(const gateway_mqtt_config_t *config)
 
     mqtt_serial_fd = config->serial_fd;
     mqtt_up_topic = config->up_topic;
+    mqtt_down_topic = config->topic;
     mqtt_tx_queue = config->tx_queue;
 
     int status = MQTTClient_create(&mqtt_client,
@@ -369,11 +372,49 @@ static int gateway_mqtt_publish_up(const gateway_message_t *message)
     if (status != MQTTCLIENT_SUCCESS)
     {
         fprintf(stderr, "MQTT 上行发布失败：%d\n", status);
-        return -1;
+        return status;
     }
 
     printf("MQTT 上行发布：%.*s\n", (int)json_len, json);
     return 0;
+}
+
+static int mqtt_up_is_stopping(mqtt_up_queue_t *queue)
+{
+    int result = pthread_mutex_lock(&queue->mutex);
+    if (result != 0)
+    {
+        return 1;
+    }
+
+    int stopping = queue->stopping;
+    pthread_mutex_unlock(&queue->mutex);
+    return stopping;
+}
+
+static int mqtt_up_reconnect(void)
+{
+    MQTTClient_connectOptions options = MQTTClient_connectOptions_initializer;
+    options.keepAliveInterval = 20;
+    options.cleansession = 1;
+    options.connectTimeout = 3;
+
+    int status = MQTTClient_connect(mqtt_client, &options);
+    if (status != MQTTCLIENT_SUCCESS)
+    {
+        return status;
+    }
+
+    /* clean session 不保留旧订阅，连接恢复后要重新订阅下行主题。 */
+    status = MQTTClient_subscribe(mqtt_client, mqtt_down_topic, GATEWAY_MQTT_QOS);
+    if (status != MQTTCLIENT_SUCCESS)
+    {
+        MQTTClient_disconnect(mqtt_client, GATEWAY_MQTT_TIMEOUT_MS);
+        return status;
+    }
+
+    fprintf(stderr, "MQTT连接已恢复，下行主题已重新订阅\n");
+    return MQTTCLIENT_SUCCESS;
 }
 
 static void *mqtt_up_publish_worker(void *arg)
@@ -415,9 +456,38 @@ static void *mqtt_up_publish_worker(void *arg)
         /* 消息已取出并更新队列状态；先解锁再调用 Paho，避免网络等待挡住入队。 */
         pthread_mutex_unlock(&queue->mutex);
 
-        if (gateway_mqtt_publish_up(&message) != 0)
+        /* 当前消息留在工作线程局部变量中，重连成功后再尝试发布。 */
+        int publish_status = gateway_mqtt_publish_up(&message);
+        while (publish_status == MQTTCLIENT_DISCONNECTED)
         {
-            fprintf(stderr, "MQTT上行发布失败\n");
+            int reconnect_status;
+            do
+            {
+                if (mqtt_up_is_stopping(queue))
+                {
+                    fprintf(stderr, "MQTT停止时取消上行重试，未发送消息不会保留到下次启动\n");
+                    return NULL;
+                }
+
+                reconnect_status = mqtt_up_reconnect();
+                if (reconnect_status != MQTTCLIENT_SUCCESS)
+                {
+                    fprintf(stderr, "MQTT重连失败：%d\n", reconnect_status);
+                    if (mqtt_up_is_stopping(queue))
+                    {
+                        fprintf(stderr, "MQTT停止时取消上行重试，未发送消息不会保留到下次启动\n");
+                        return NULL;
+                    }
+                    sleep(1);
+                }
+            } while (reconnect_status != MQTTCLIENT_SUCCESS);
+
+            publish_status = gateway_mqtt_publish_up(&message);
+        }
+
+        if (publish_status != MQTTCLIENT_SUCCESS)
+        {
+            fprintf(stderr, "MQTT上行消息发布失败：%d\n", publish_status);
         }
     }
 }
