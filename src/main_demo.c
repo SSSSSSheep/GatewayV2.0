@@ -1,7 +1,14 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include <stddef.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <signal.h>
+#include <string.h>
 
 #include "gateway/message_json.h"
 #include "gateway/serial.h"
@@ -115,6 +122,20 @@ int main(void)
         .tx_queue = &tx_queue,
         .serial_fd = fd};
 
+    /* MQTT 线程会继承此设置，退出信号由 IO 循环统一接收。 */
+    sigset_t exit_signals;
+    sigemptyset(&exit_signals);
+    sigaddset(&exit_signals, SIGINT);
+    sigaddset(&exit_signals, SIGTERM);
+
+    int signal_result = pthread_sigmask(SIG_BLOCK, &exit_signals, NULL);
+    if (signal_result != 0)
+    {
+        fprintf(stderr, "屏蔽退出信号失败：%s\n", strerror(signal_result));
+        gateway_serial_tx_queue_destroy(&tx_queue);
+        serial_close(fd);
+        return 1;
+    }
     if (gateway_mqtt_start(&mqtt_config) != 0)
     {
         fprintf(stderr, "MQTT启动失败\n");

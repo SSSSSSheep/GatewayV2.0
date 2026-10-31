@@ -1,3 +1,7 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "gateway/jdy_parser.h"
 #include "gateway/io_loop.h"
 #include "gateway/message_json.h"
@@ -10,9 +14,11 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/epoll.h>
+#include <signal.h>
+#include <sys/signalfd.h>
 #include <unistd.h>
 
-#define IO_LOOP_MAX_EVENTS 2
+#define IO_LOOP_MAX_EVENTS 3
 #define IO_LOOP_READ_SIZE 128
 
 typedef struct io_loop_ctx io_loop_ctx_t;
@@ -20,7 +26,8 @@ typedef struct io_loop_ctx io_loop_ctx_t;
 typedef enum
 {
     IO_LOOP_WATCH_SERIAL,
-    IO_LOOP_WATCH_TX_NOTIFY
+    IO_LOOP_WATCH_TX_NOTIFY,
+    IO_LOOP_WATCH_SIGNAL
 } io_loop_watch_kind_t;
 
 typedef struct
@@ -34,6 +41,7 @@ struct io_loop_ctx
     int serial_fd;
     int epoll_fd;
     int notify_fd;
+    int signal_fd;
     struct epoll_event serial_event;
     gateway_serial_tx_queue_t *tx_queue;
     gateway_tx_item_t pending_item;
@@ -42,6 +50,7 @@ struct io_loop_ctx
     jdy_parser_t parser;
     io_loop_watch_t serial_watch;
     io_loop_watch_t notify_watch;
+    io_loop_watch_t signal_watch;
 };
 
 /**
@@ -203,12 +212,11 @@ static int process_serial_input(io_loop_ctx_t *ctx)
                     message.msg,
                     frame.payload + message_header_len,
                     message.msg_len);
-                fprintf(stderr, "[诊断] 开始 MQTT 上行发布\n");
-                if (gateway_mqtt_publish_up(&message) != 0)
+                /* IO 线程只入队，不在 epoll 回调里等待 MQTT 网络发布。 */
+                if (gateway_mqtt_enqueue_up(&message) != 0)
                 {
-                    fprintf(stderr, "串口帧上行发布失败\n");
+                    fprintf(stderr, "MQTT上行队列拒收消息：%s\n", strerror(errno));
                 }
-                fprintf(stderr, "[诊断] MQTT 上行发布调用已返回\n");
                 printf("成功解析出一帧！消息体长度: %zu\n",
                        message.msg_len);
                 continue;
@@ -350,6 +358,7 @@ int io_loop_run(int serial_fd, gateway_serial_tx_queue_t *tx_queue)
         .serial_fd = serial_fd,
         .epoll_fd = -1,
         .notify_fd = -1,
+        .signal_fd = -1,
         .tx_queue = tx_queue,
     };
 
@@ -373,10 +382,27 @@ int io_loop_run(int serial_fd, gateway_serial_tx_queue_t *tx_queue)
         return -1;
     }
 
+    sigset_t exit_signals;
+    sigemptyset(&exit_signals);
+    sigaddset(&exit_signals, SIGINT);
+    sigaddset(&exit_signals, SIGTERM);
+
+    ctx.signal_fd = signalfd(
+        -1,
+        &exit_signals,
+        SFD_NONBLOCK | SFD_CLOEXEC);
+    if (ctx.signal_fd < 0)
+    {
+        perror("signalfd 创建失败");
+        if (ctx.signal_fd >= 0) close(ctx.signal_fd);
+        close(ctx.epoll_fd);
+        return -1;
+    }
     ctx.notify_fd = gateway_serial_tx_queue_fd(ctx.tx_queue);
     if (ctx.notify_fd < 0)
     {
         perror("获取发送队列通知 fd 失败");
+        if (ctx.signal_fd >= 0) close(ctx.signal_fd);
         close(ctx.epoll_fd);
         return -1;
     }
@@ -384,6 +410,7 @@ int io_loop_run(int serial_fd, gateway_serial_tx_queue_t *tx_queue)
     if (parser_init(&ctx.parser) != JDY_PARSER_OK)
     {
         fprintf(stderr, "解析器初始化失败\n");
+        if (ctx.signal_fd >= 0) close(ctx.signal_fd);
         close(ctx.epoll_fd);
         return -1;
     }
@@ -393,6 +420,9 @@ int io_loop_run(int serial_fd, gateway_serial_tx_queue_t *tx_queue)
 
     ctx.notify_watch.ctx = &ctx;
     ctx.notify_watch.kind = IO_LOOP_WATCH_TX_NOTIFY;
+
+    ctx.signal_watch.ctx = &ctx;
+    ctx.signal_watch.kind = IO_LOOP_WATCH_SIGNAL;
 
     ctx.serial_event.events = EPOLLIN;
     ctx.serial_event.data.ptr = &ctx.serial_watch;
@@ -404,6 +434,7 @@ int io_loop_run(int serial_fd, gateway_serial_tx_queue_t *tx_queue)
             &ctx.serial_event) < 0)
     {
         perror("epoll_ctl add serial fd failed");
+        if (ctx.signal_fd >= 0) close(ctx.signal_fd);
         close(ctx.epoll_fd);
         return -1;
     }
@@ -419,13 +450,32 @@ int io_loop_run(int serial_fd, gateway_serial_tx_queue_t *tx_queue)
             &tx_event) < 0)
     {
         perror("epoll_ctl add notify fd failed");
+        if (ctx.signal_fd >= 0) close(ctx.signal_fd);
         close(ctx.epoll_fd);
         return -1;
     }
 
+    int stop_requested = 0;
+
+    /* 让退出信号唤醒 epoll，循环才能走正常清理流程。 */
+    struct epoll_event signal_event = {0};
+    signal_event.events = EPOLLIN;
+    signal_event.data.ptr = &ctx.signal_watch;
+
+    if (epoll_ctl(
+            ctx.epoll_fd,
+            EPOLL_CTL_ADD,
+            ctx.signal_fd,
+            &signal_event) < 0)
+    {
+        perror("epoll_ctl add signal fd failed");
+        close(ctx.signal_fd);
+        close(ctx.epoll_fd);
+        return -1;
+    }
     printf("循环事件已启动，等待串口数据……\n");
 
-    while (1)
+    while (!stop_requested)
     {
         struct epoll_event events[IO_LOOP_MAX_EVENTS];
         int event_count = epoll_wait(
@@ -443,7 +493,8 @@ int io_loop_run(int serial_fd, gateway_serial_tx_queue_t *tx_queue)
             }
 
             perror("epoll_wait failed");
-            close(ctx.epoll_fd);
+        if (ctx.signal_fd >= 0) close(ctx.signal_fd);
+        close(ctx.epoll_fd);
             return -1;
         }
 
@@ -457,19 +508,53 @@ int io_loop_run(int serial_fd, gateway_serial_tx_queue_t *tx_queue)
             if ((ready_events & (EPOLLERR | EPOLLHUP)) != 0)
             {
                 fprintf(stderr, "epoll检测到文件描述符错误\n");
-                close(ctx.epoll_fd);
+        if (ctx.signal_fd >= 0) close(ctx.signal_fd);
+        close(ctx.epoll_fd);
                 return -1;
             }
 
             if (watch == NULL || watch->ctx != &ctx)
             {
                 fprintf(stderr, "epoll返回了无效事件上下文\n");
-                close(ctx.epoll_fd);
+        if (ctx.signal_fd >= 0) close(ctx.signal_fd);
+        close(ctx.epoll_fd);
                 return -1;
             }
 
             fprintf(stderr, "[诊断] epoll返回 kind=%d events=0x%x\n",
                     (int)watch->kind, ready_events);
+            if (watch->kind == IO_LOOP_WATCH_SIGNAL)
+            {
+                struct signalfd_siginfo signal_info;
+                ssize_t bytes_read;
+
+                /* 信号由 signalfd 交给 epoll 线程处理，退出时才能走完整理流程。 */
+                do
+                {
+                    bytes_read = read(
+                        ctx.signal_fd,
+                        &signal_info,
+                        sizeof(signal_info));
+                } while (bytes_read < 0 && errno == EINTR);
+
+                if (bytes_read < 0 &&
+                    (errno == EAGAIN || errno == EWOULDBLOCK))
+                {
+                    continue;
+                }
+
+                if (bytes_read != (ssize_t)sizeof(signal_info))
+                {
+                    perror("读取退出信号失败");
+        if (ctx.signal_fd >= 0) close(ctx.signal_fd);
+        close(ctx.epoll_fd);
+                    return -1;
+                }
+
+                printf("收到退出信号，正在清理资源……\n");
+                stop_requested = 1;
+                break;
+            }
             if (watch->kind == IO_LOOP_WATCH_TX_NOTIFY)
             {
                 if ((ready_events & EPOLLIN) == 0)
@@ -480,13 +565,15 @@ int io_loop_run(int serial_fd, gateway_serial_tx_queue_t *tx_queue)
                 if (consume_tx_notification(&ctx) != 0)
                 {
                     perror("读取串口发送队列通知失败");
-                    close(ctx.epoll_fd);
+        if (ctx.signal_fd >= 0) close(ctx.signal_fd);
+        close(ctx.epoll_fd);
                     return -1;
                 }
 
                 if (process_tx_queue(&ctx) != 0)
                 {
-                    close(ctx.epoll_fd);
+        if (ctx.signal_fd >= 0) close(ctx.signal_fd);
+        close(ctx.epoll_fd);
                     return -1;
                 }
 
@@ -498,17 +585,23 @@ int io_loop_run(int serial_fd, gateway_serial_tx_queue_t *tx_queue)
                 if ((ready_events & EPOLLIN) != 0 &&
                     process_serial_input(&ctx) != 0)
                 {
-                    close(ctx.epoll_fd);
+        if (ctx.signal_fd >= 0) close(ctx.signal_fd);
+        close(ctx.epoll_fd);
                     return -1;
                 }
 
                 if ((ready_events & EPOLLOUT) != 0 &&
                     process_tx_queue(&ctx) != 0)
                 {
-                    close(ctx.epoll_fd);
+        if (ctx.signal_fd >= 0) close(ctx.signal_fd);
+        close(ctx.epoll_fd);
                     return -1;
                 }
             }
         }
     }
+    /* 收到退出信号后关闭事件描述符，让主函数继续清理 MQTT 和串口。 */
+    close(ctx.signal_fd);
+    close(ctx.epoll_fd);
+    return 0;
 }

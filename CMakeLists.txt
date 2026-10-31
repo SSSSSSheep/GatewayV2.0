@@ -283,6 +283,13 @@ target_link_libraries(gateway_device
         gateway_build_options
         ${PAHO_MQTT3C_LIBRARY}
 )
+if(CMAKE_CROSSCOMPILING)
+    target_link_libraries(gateway_device PUBLIC
+        /home/admin123/toolchains/rk3568-sysroot-clean/lib/aarch64-linux-gnu/libpthread.so.0)
+else()
+    find_package(Threads REQUIRED)
+    target_link_libraries(gateway_device PUBLIC Threads::Threads)
+endif()
 
 add_executable(
     test_message_json_encode

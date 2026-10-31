@@ -28,10 +28,10 @@ int gateway_mqtt_start(const gateway_mqtt_config_t *config);
 void gateway_mqtt_stop(void);
 
 /**
- * @brief 发布上行消息
+ * @brief 非阻塞地将上行消息放入 MQTT 发布队列
  * @param message 上行消息
  * @return 0表示成功，-1表示失败
  */
-int gateway_mqtt_publish_up(const gateway_message_t *message);
+int gateway_mqtt_enqueue_up(const gateway_message_t *message);
 
 #endif // !GATEWAY_MQTT_H

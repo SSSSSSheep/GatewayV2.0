@@ -7,9 +7,27 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
+#include <pthread.h>
 
-#define GATEWAY_MQTT_QOS 0             // QoS：0 至多一次，1 至少一次，2 恰好一次。
-#define GATEWAY_MQTT_TIMEOUT_MS 10000L // MQTTClient_disconnect() 的等待时间，单位为毫秒。
+#define GATEWAY_MQTT_QOS 0                 // QoS：0 至多一次，1 至少一次，2 恰好一次。
+#define GATEWAY_MQTT_TIMEOUT_MS 10000L     // MQTTClient_disconnect() 的等待时间，单位为毫秒。
+#define GATEWAY_MQTT_UP_QUEUE_CAPACITY 64U // MQTT上行消息队列容量
+
+/* 有界队列把串口解析和 MQTT 网络发布隔开，避免网络等待拖住 epoll。 */
+typedef struct
+{
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    gateway_message_t items[GATEWAY_MQTT_UP_QUEUE_CAPACITY];
+    size_t head;
+    size_t tail;
+    size_t count;
+    int stopping;
+} mqtt_up_queue_t;
+
+static mqtt_up_queue_t mqtt_up_queue; // MQTT上行消息队列
+static pthread_t mqtt_up_thread;      // MQTT上行消息处理线程
+static int mqtt_up_thread_started;    // MQTT上行消息处理线程是否已经启动
 
 static MQTTClient mqtt_client;  // MQTT客户端句柄
 static int mqtt_serial_fd = -1; // 串口文件描述符
@@ -17,6 +35,22 @@ static int mqtt_started = 0;    // MQTT是否已经启动
 
 static const char *mqtt_up_topic = NULL;         // MQTT上行主题
 static gateway_serial_tx_queue_t *mqtt_tx_queue; // 串口发送队列，承接 MQTT 下行指令。
+
+/**
+ * @brief 同步发布 MQTT 上行消息
+ * @param message 消息
+ * @return 0 表示成功，-1 表示失败
+ */
+static int gateway_mqtt_publish_up(const gateway_message_t *message);
+
+/**
+ * @brief MQTT上行消息处理线程
+ * @param arg 线程参数
+ * @return void
+ */
+static void *mqtt_up_publish_worker(void *arg);
+
+static int mqtt_up_publisher_stop(void);
 
 /**
  * @brief MQTT连接回调函数
@@ -127,6 +161,37 @@ static void mqtt_message_delivered(void *context, MQTTClient_deliveryToken token
     (void)token;
 }
 
+static int mqtt_up_publisher_start(void)
+{
+    int result = pthread_mutex_init(&mqtt_up_queue.mutex, NULL);
+    if (result != 0)
+    {
+        errno = result;
+        return -1;
+    }
+
+    result = pthread_cond_init(&mqtt_up_queue.cond, NULL);
+    if (result != 0)
+    {
+        pthread_mutex_destroy(&mqtt_up_queue.mutex);
+        errno = result;
+        return -1;
+    }
+
+    /* 队列同步对象就绪后再启动消费者，避免线程访问未初始化状态。 */
+    result = pthread_create(&mqtt_up_thread, NULL, mqtt_up_publish_worker, &mqtt_up_queue);
+    if (result != 0)
+    {
+        pthread_cond_destroy(&mqtt_up_queue.cond);
+        pthread_mutex_destroy(&mqtt_up_queue.mutex);
+        errno = result;
+        return -1;
+    }
+
+    mqtt_up_thread_started = 1;
+    return 0;
+}
+
 int gateway_mqtt_start(const gateway_mqtt_config_t *config)
 {
     if (config == NULL ||
@@ -192,7 +257,66 @@ int gateway_mqtt_start(const gateway_mqtt_config_t *config)
         return -1;
     }
 
+    if (mqtt_up_publisher_start() != 0)
+    {
+        fprintf(stderr, "MQTT上行发布线程启动失败：%s\n", strerror(errno));
+        MQTTClient_disconnect(mqtt_client, GATEWAY_MQTT_TIMEOUT_MS);
+        MQTTClient_destroy(&mqtt_client);
+        mqtt_serial_fd = -1;
+        mqtt_up_topic = NULL;
+        mqtt_tx_queue = NULL;
+        return -1;
+    }
+
     mqtt_started = 1;
+    return 0;
+}
+
+int gateway_mqtt_enqueue_up(const gateway_message_t *message)
+{
+    mqtt_up_queue_t *queue = &mqtt_up_queue;
+
+    if (message == NULL || !mqtt_started || !mqtt_up_thread_started)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    /* 入队发生在 epoll 线程，锁忙时立即拒收，不能在这里等待发布线程。 */
+    int result = pthread_mutex_trylock(&queue->mutex);
+    if (result != 0)
+    {
+        errno = (result == EBUSY) ? EAGAIN : result;
+        return -1;
+    }
+
+    /* 队列已停止或已满时拒收新消息，不覆盖已排队的温度数据。 */
+    if (queue->stopping || queue->count >= GATEWAY_MQTT_UP_QUEUE_CAPACITY)
+    {
+        pthread_mutex_unlock(&queue->mutex);
+        errno = queue->stopping ? ECANCELED : ENOSPC;
+        return -1;
+    }
+
+    /* 复制消息到队列，避免调用者的栈上数据在异步发布时失效。 */
+    queue->items[queue->tail] = *message;
+    queue->tail = (queue->tail + 1U) % GATEWAY_MQTT_UP_QUEUE_CAPACITY;
+
+    queue->count++;
+
+    /* 新消息入队后唤醒正在等待的发布线程。 */
+    result = pthread_cond_signal(&queue->cond);
+    if (result != 0)
+    {
+        queue->tail = (queue->tail + GATEWAY_MQTT_UP_QUEUE_CAPACITY - 1U) %
+                      GATEWAY_MQTT_UP_QUEUE_CAPACITY;
+        queue->count--;
+        pthread_mutex_unlock(&queue->mutex);
+        errno = result;
+        return -1;
+    }
+
+    pthread_mutex_unlock(&queue->mutex);
     return 0;
 }
 
@@ -203,6 +327,12 @@ void gateway_mqtt_stop(void)
         return;
     }
 
+    if (mqtt_up_publisher_stop() != 0)
+    {
+        fprintf(stderr, "MQTT上行发布线程停止失败：%s\n", strerror(errno));
+        return;
+    }
+
     MQTTClient_disconnect(mqtt_client, GATEWAY_MQTT_TIMEOUT_MS);
     MQTTClient_destroy(&mqtt_client);
 
@@ -210,7 +340,7 @@ void gateway_mqtt_stop(void)
     mqtt_started = 0;
 }
 
-int gateway_mqtt_publish_up(const gateway_message_t *message)
+static int gateway_mqtt_publish_up(const gateway_message_t *message)
 {
     char json[GATEWAY_MAX_JSON_SIZE] = {0};
     size_t json_len = 0;
@@ -233,6 +363,7 @@ int gateway_mqtt_publish_up(const gateway_message_t *message)
     mqtt_message.qos = GATEWAY_MQTT_QOS;
     mqtt_message.retained = 0; // 状态上报不保留，避免新订阅者收到过期温度。
 
+    /* Paho 的同步发布只放在工作线程里，不能阻塞串口事件循环。 */
     status = MQTTClient_publishMessage(mqtt_client, mqtt_up_topic, &mqtt_message, NULL);
 
     if (status != MQTTCLIENT_SUCCESS)
@@ -242,5 +373,91 @@ int gateway_mqtt_publish_up(const gateway_message_t *message)
     }
 
     printf("MQTT 上行发布：%.*s\n", (int)json_len, json);
+    return 0;
+}
+
+static void *mqtt_up_publish_worker(void *arg)
+{
+    mqtt_up_queue_t *queue = arg;
+
+    while (1)
+    {
+        int result = pthread_mutex_lock(&queue->mutex);
+        if (result != 0)
+        {
+            fprintf(stderr, "MQTT上行队列加锁失败：%s\n", strerror(result));
+            return NULL;
+        }
+
+        /* 条件变量可能提前唤醒，每次醒来都要重新检查队列状态。 */
+        while (queue->count == 0 && !queue->stopping)
+        {
+            result = pthread_cond_wait(&queue->cond, &queue->mutex);
+            if (result != 0)
+            {
+                pthread_mutex_unlock(&queue->mutex);
+                fprintf(stderr, "MQTT上行队列等待失败：%s\n", strerror(result));
+                return NULL;
+            }
+        }
+
+        if (queue->count == 0 && queue->stopping)
+        {
+            pthread_mutex_unlock(&queue->mutex);
+            return NULL;
+        }
+
+        /* 先取走消息并释放队列锁，再调用 Paho，避免网络等待挡住新消息入队。 */
+        gateway_message_t message = queue->items[queue->head];
+        queue->head = (queue->head + 1U) % GATEWAY_MQTT_UP_QUEUE_CAPACITY;
+        queue->count--;
+
+        /* 消息已取出并更新队列状态；先解锁再调用 Paho，避免网络等待挡住入队。 */
+        pthread_mutex_unlock(&queue->mutex);
+
+        if (gateway_mqtt_publish_up(&message) != 0)
+        {
+            fprintf(stderr, "MQTT上行发布失败\n");
+        }
+    }
+}
+
+static int mqtt_up_publisher_stop(void)
+{
+    if (!mqtt_up_thread_started)
+    {
+        return 0;
+    }
+
+    int result = pthread_mutex_lock(&mqtt_up_queue.mutex);
+    if (result != 0)
+    {
+        errno = result;
+        return -1;
+    }
+
+    /* 唤醒休眠中的发布线程，让它排空队列后退出。 */
+    mqtt_up_queue.stopping = 1;
+    result = pthread_cond_broadcast(&mqtt_up_queue.cond);
+    pthread_mutex_unlock(&mqtt_up_queue.mutex);
+
+    if (result != 0)
+    {
+        errno = result;
+        return -1;
+    }
+
+    /* 等发布线程退出后再断开客户端，避免线程仍在使用 MQTTClient。 */
+    result = pthread_join(mqtt_up_thread, NULL);
+
+    if (result != 0)
+    {
+        errno = result;
+        return -1;
+    }
+
+    mqtt_up_thread_started = 0;
+    pthread_cond_destroy(&mqtt_up_queue.cond);
+    pthread_mutex_destroy(&mqtt_up_queue.mutex);
     return 0;
 }
