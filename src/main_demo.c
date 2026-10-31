@@ -8,6 +8,7 @@
 #include "gateway/jdy_at.h"
 #include "gateway/mqtt.h"
 #include "gateway/io_loop.h"
+#include "gateway/serial_tx_queue.h"
 
 int main(void)
 {
@@ -97,20 +98,27 @@ int main(void)
         return 1;
     }
 
-    /*
-     * 当前阶段不在这里发送固定packet。
-     * 所有真正的下行数据都由MQTT回调接收后组包并发送。
-     */
+    gateway_serial_tx_queue_t tx_queue;
+
+    if (gateway_serial_tx_queue_init(&tx_queue) != 0)
+    {
+        fprintf(stderr, "串口发送队列初始化失败\n");
+        serial_close(fd);
+        return 1;
+    }
+
     gateway_mqtt_config_t mqtt_config = {
         .broker_address = "tcp://192.168.0.101:1883",
         .client_id = "rk_gateway_v2_pc",
         .topic = "gateway/down",
         .up_topic = "gateway/up",
+        .tx_queue = &tx_queue,
         .serial_fd = fd};
 
     if (gateway_mqtt_start(&mqtt_config) != 0)
     {
         fprintf(stderr, "MQTT启动失败\n");
+        gateway_serial_tx_queue_destroy(&tx_queue);
         serial_close(fd);
         return 1;
     }
@@ -122,14 +130,16 @@ int main(void)
 
     printf("进入串口事件循环，等待上行数据...\n");
 
-    if (io_loop_run(fd) != 0)
+    if (io_loop_run(fd, &tx_queue) != 0)
     {
         gateway_mqtt_stop();
+        gateway_serial_tx_queue_destroy(&tx_queue);
         serial_close(fd);
         return 1;
     }
 
     gateway_mqtt_stop();
+    gateway_serial_tx_queue_destroy(&tx_queue);
     serial_close(fd);
     return 0;
 }

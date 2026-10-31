@@ -32,9 +32,9 @@ static int test_complete_frame(void)
 {
     static const uint8_t input[] = {
         0xF1, 0xDD, 0x07,
-        0x23, 0x23,      // source
-        0xFF, 0xFF,      // destination
-        0x41, 0x42, 0x43 // payload: "ABC"
+        0x23, 0x23,      // 源地址
+        0xFF, 0xFF,      // 目标地址
+        0x41, 0x42, 0x43 // 消息体："ABC"
     };
     static const uint8_t source[] = {0x23, 0x23};
     static const uint8_t destination[] = {0xFF, 0xFF};

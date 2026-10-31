@@ -46,7 +46,7 @@ int main(void)
     CHECK(out.msg_len == 1);
     CHECK(out.msg[0] == 0x31);
 
-    /* 不带 NUL 结尾，模拟 MQTT payload */
+    /* 不带 NUL 结尾，模拟 MQTT 消息体 */
     char raw[sizeof(valid) - 1];
     memcpy(raw, valid, sizeof(raw));
 
@@ -64,7 +64,7 @@ int main(void)
     CHECK(out.msg_len == 2);
     CHECK(out.msg[0] == 0x00 && out.msg[1] == 0xAF);
 
-    /* 最大合法 payload：12 字节 */
+    /* 最大合法消息体：12 字节 */
     const char maximum[] =
         "{\"conn_type\":1,\"id\":\"0002\","
         "\"msg\":\"000102030405060708090A0B\"}";

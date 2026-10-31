@@ -13,20 +13,18 @@ static int contains_escaped_nul(const char *text, size_t len)
 {
     for (size_t i = 0; i < len; i++)
     {
-        // 跳过非反斜杠字符。
         if (text[i] != '\\')
         {
             continue;
         }
 
-        // 跳过转义的反斜杠。
         if (len - i >= 6 &&
             memcmp(text + i, "\\u0000", 6) == 0)
         {
             return 1;
         }
 
-        /* 跳过被转义的字符，包括转义反斜杠。 */
+        /* 跳过转义对，避免把转义反斜杠后面的文本误判成 NUL 转义。 */
         if (i + 1 < len)
         {
             i++;
@@ -36,53 +34,20 @@ static int contains_escaped_nul(const char *text, size_t len)
     return 0;
 }
 
-/*
- * message_json_decode 数据流转图解：
- *
- * 【输入】{"conn_type":1,"id":"0002","msg":"31"}
- *         ↓
- * 【解析】conn_type       | id              | msg
- *         数值 1         | 字符串 "0002"   | 字符串 "31"
- *         ↓
- * 【校验】必须为数值1    | 必须为4个HEX字符 | 必须为1～12字节的HEX文本
- *         ↓
- * 【转换】保留数值1      | hex_decode()    | hex_decode()
- *         ↓
- * 【结果】1              | 0x00 0x02       | 0x31
- *         ↓
- * 【输出】gateway_message_t
- *         conn_type = 1
- *         id[0]     = 0x00
- *         id[1]     = 0x02
- *         msg_len   = 1
- *         msg[0]    = 0x31，其余msg元素为0
- *         ↓
- * 【释放】cJSON_Delete(root)，释放解析树
- * 【返回】MESSAGE_JSON_OK
- *
- * 错误示例：
- *   {"id":"0002"}                    → MESSAGE_JSON_ERR_FIELD
- *   conn_type为字符串"1"             → MESSAGE_JSON_ERR_TYPE
- *   msg为字符串"3G"                  → MESSAGE_JSON_ERR_HEX
- *   解析树创建成功后，失败路径统一释放；输出结构体保持不变。
- */
 message_json_status_t message_json_to_decode(const void *payload,
                                              size_t payload_len,
                                              gateway_message_t *out_msg)
 {
-    // 参数校验
     if (payload == NULL || out_msg == NULL || payload_len == 0)
     {
         return MESSAGE_JSON_ERR_ARGUMENT;
     }
 
-    // JSON 文本长度限制
     if (payload_len > GATEWAY_MAX_JSON_SIZE)
     {
         return MESSAGE_JSON_ERR_TOO_LARGE;
     }
 
-    // JSON 文本包含 NUL 字符
     const char *input = (const char *)payload;
 
     if (memchr(input, '\0', payload_len) != NULL ||
@@ -93,7 +58,7 @@ message_json_status_t message_json_to_decode(const void *payload,
 
     /*
      * 输入长度已受限制，所以这里可以安全复制并补 NUL。
-     * 不直接把 MQTT payload 当成普通 C 字符串使用。
+     * MQTT 消息体不保证以 NUL 结尾，不能直接当普通 C 字符串读取。
      */
     char text[GATEWAY_MAX_JSON_SIZE + 1];
     memcpy(text, input, payload_len);
@@ -250,42 +215,35 @@ cleanup:
  */
 message_json_status_t message_json_to_encode(const gateway_message_t *message, char *out_json, size_t out_capacity, size_t *out_len)
 {
-    // 创建 JSON 文本
     char encoded[GATEWAY_MAX_JSON_SIZE] = {0};
-    // JSON 文本偏移量
     size_t offset = 0;
-    // JSON 文本写入长度
     int written = 0;
 
-    // 参数校验
     if (message == NULL || out_json == NULL || out_len == NULL)
     {
         return MESSAGE_JSON_ERR_ARGUMENT;
     }
 
-    // 目前仅支持 conn_type = 1
     if (message->conn_type != 1)
     {
         return MESSAGE_JSON_ERR_TYPE;
     }
 
-    // ID 长度
+    // 消息体不能为空，也不能超过协议上限。
     if (message->msg_len == 0 || message->msg_len > GATEWAY_MAX_MSG_SIZE)
     {
         return MESSAGE_JSON_ERR_RANGE;
     }
 
-    // 输出容量
     *out_len = 0;
 
-    // JSON 文本编码 连接类型 id
     written = snprintf(encoded + offset, sizeof(encoded) - offset,
                        "{\"conn_type\":%u,\"id\":\"%02X%02X\",\"msg\":\"",
                        (unsigned int)message->conn_type,
                        (unsigned int)message->id[0],
                        (unsigned int)message->id[1]);
 
-    // 后移json文本偏移量
+    // snprintf 返回所需长度；超过剩余空间就拒绝截断结果。
     if (written < 0 || (size_t)written >= sizeof(encoded) - offset)
     {
         return MESSAGE_JSON_ERR_JSON;
@@ -293,20 +251,17 @@ message_json_status_t message_json_to_encode(const gateway_message_t *message, c
 
     offset += (size_t)written;
 
-    // JSON 文本编码 消息内容
+    // 消息体按字节编码成两位大写 HEX，二进制零也能完整表示。
     for (size_t i = 0; i < message->msg_len; i++)
     {
-        // 取出当前字节的高四位
         encoded[offset] = "0123456789ABCDEF"[message->msg[i] >> 4];
-        // 取出当前字节的低四位
         encoded[offset + 1U] = "0123456789ABCDEF"[message->msg[i] & 0x0FU];
         offset += 2U;
     }
 
-    // 补充 }
     written = snprintf(encoded + offset, sizeof(encoded) - offset, "\"}");
 
-    // 检查 snprintf 返回值 与 剩余空间容量是否匹配
+    // 写入 JSON 结尾前检查容量，避免静默截断。
     if (written < 0 || (size_t)written >= sizeof(encoded) - offset)
     {
         return MESSAGE_JSON_ERR_JSON;

@@ -75,7 +75,7 @@ int main(void)
     CHECK(out[14] == '\r');
     CHECK(out[15] == '\n');
 
-    /* 3. 业务数据包含00，不能发生字符串截断。 */
+    /* 3. 消息体包含00，不能发生字符串截断。 */
     msg.msg[0] = 0x00;
 
     CHECK(jdy_at_build(
@@ -141,7 +141,7 @@ int main(void)
 
     msg.conn_type = 1;
 
-    /* 8. 零长度业务消息。 */
+    /* 8. 零长度消息体。 */
     msg.msg_len = 0;
 
     CHECK(jdy_at_build(

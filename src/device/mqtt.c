@@ -6,15 +6,17 @@
 #include <MQTTClient.h>
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
 
-#define GATEWAY_MQTT_QOS 0             // QOS等级，0表示最多一次，1表示至少一次，2表示只有一次
-#define GATEWAY_MQTT_TIMEOUT_MS 10000L // 连接超时时间
+#define GATEWAY_MQTT_QOS 0             // QoS：0 至多一次，1 至少一次，2 恰好一次。
+#define GATEWAY_MQTT_TIMEOUT_MS 10000L // MQTTClient_disconnect() 的等待时间，单位为毫秒。
 
 static MQTTClient mqtt_client;  // MQTT客户端句柄
 static int mqtt_serial_fd = -1; // 串口文件描述符
 static int mqtt_started = 0;    // MQTT是否已经启动
 
-static const char *mqtt_up_topic = NULL; // MQTT上行主题
+static const char *mqtt_up_topic = NULL;         // MQTT上行主题
+static gateway_serial_tx_queue_t *mqtt_tx_queue; // 串口发送队列，承接 MQTT 下行指令。
 
 /**
  * @brief MQTT连接回调函数
@@ -30,12 +32,12 @@ static void mqtt_connection_lost(void *context, char *cause)
 }
 
 /**
- * @brief 处理MQTT下行消息 解码JSON 组装JDY指令并写入串口
+ * @brief 解码 MQTT 下行消息并将 JDY 指令投递到串口发送队列
  * @param context 上下文
  * @param topic_name 主题名称
  * @param topic_len 主题长度
  * @param message MQTT消息
- * @return 1 表示消息已处理并释放；0 表示暂未处理、要求 Paho 保留消息以便重试。
+ * @return 1 表示消息已消费并由本回调释放；0 表示暂未消费、由 Paho 保留重试；错误分支还会返回 -1，其语义需按当前 Paho 版本确认。
  */
 static int mqtt_message_arrived(void *context, char *topic_name, int topic_len, MQTTClient_message *message)
 {
@@ -54,7 +56,6 @@ static int mqtt_message_arrived(void *context, char *topic_name, int topic_len, 
            message->payloadlen,
            (const char *)message->payload);
 
-    // 解码JSON
     gateway_message_t decoded = {0};
 
     message_json_status_t json_status = message_json_to_decode(message->payload, (size_t)message->payloadlen, &decoded);
@@ -67,7 +68,6 @@ static int mqtt_message_arrived(void *context, char *topic_name, int topic_len, 
         return -1;
     }
 
-    // 组装JDY指令
     uint8_t packet[JDY_AT_MAX_SIZE] = {0};
     size_t packet_len = 0;
 
@@ -98,17 +98,18 @@ static int mqtt_message_arrived(void *context, char *topic_name, int topic_len, 
         return 1;
     }
 
-    // 写入串口文件
-    ssize_t written = serial_write(mqtt_serial_fd, packet, packet_len);
-    if (written < 0)
+    // MQTT 回调只投递数据，由 IO 循环统一写串口，避免回调直接操作串口。
+    if (gateway_serial_tx_queue_push(
+            mqtt_tx_queue,
+            packet,
+            packet_len) != 0)
     {
-        perror("MQTT下行串口写入");
+        fprintf(stderr, "串口发送队列写入失败：%s\n", strerror(errno));
     }
     else
     {
-        printf("串口写入：%zd/%zu 字节\n", written, packet_len);
+        printf("串口帧已加入发送队列\n");
     }
-
     MQTTClient_freeMessage(&message);
     MQTTClient_free(topic_name);
 
@@ -140,8 +141,8 @@ int gateway_mqtt_start(const gateway_mqtt_config_t *config)
 
     mqtt_serial_fd = config->serial_fd;
     mqtt_up_topic = config->up_topic;
+    mqtt_tx_queue = config->tx_queue;
 
-    // 初始化MQTT客户端
     int status = MQTTClient_create(&mqtt_client,
                                    config->broker_address,
                                    config->client_id,
@@ -154,7 +155,6 @@ int gateway_mqtt_start(const gateway_mqtt_config_t *config)
         return -1;
     }
 
-    // 设置MQTT客户端回调函数
     status = MQTTClient_setCallbacks(mqtt_client,
                                      NULL,
                                      mqtt_connection_lost,
@@ -168,13 +168,11 @@ int gateway_mqtt_start(const gateway_mqtt_config_t *config)
         return -1;
     }
 
-    // 设置MQTT客户端连接选项
     MQTTClient_connectOptions options = MQTTClient_connectOptions_initializer;
 
     options.keepAliveInterval = 20; // 设置MQTT的心跳保活时间
     options.cleansession = 1;       // 设置MQTT的清理会话选项
 
-    // 设置MQTT客户端连接选项
     status = MQTTClient_connect(mqtt_client, &options);
 
     if (status != MQTTCLIENT_SUCCESS)
@@ -184,7 +182,6 @@ int gateway_mqtt_start(const gateway_mqtt_config_t *config)
         return -1;
     }
 
-    // 订阅MQTT主题
     status = MQTTClient_subscribe(mqtt_client, config->topic, GATEWAY_MQTT_QOS);
 
     if (status != MQTTCLIENT_SUCCESS)
@@ -215,32 +212,27 @@ void gateway_mqtt_stop(void)
 
 int gateway_mqtt_publish_up(const gateway_message_t *message)
 {
-    // json编码
     char json[GATEWAY_MAX_JSON_SIZE] = {0};
     size_t json_len = 0;
     MQTTClient_message mqtt_message = MQTTClient_message_initializer;
     int status = 0;
 
-    // 判断是否已经启动
     if (!mqtt_started || message == NULL || mqtt_up_topic == NULL)
     {
         return -1;
     }
 
-    // 将下位机返回的指令解码 -> json
     if (message_json_to_encode(message, json, sizeof(json), &json_len) != MESSAGE_JSON_OK)
     {
         fprintf(stderr, "上行JSON编码失败\n");
         return -1;
     }
 
-    // 设置MQTT消息
     mqtt_message.payload = json;
     mqtt_message.payloadlen = (int)json_len;
     mqtt_message.qos = GATEWAY_MQTT_QOS;
-    mqtt_message.retained = 0; // 设置消息是否保留
+    mqtt_message.retained = 0; // 状态上报不保留，避免新订阅者收到过期温度。
 
-    // 发布MQTT消息
     status = MQTTClient_publishMessage(mqtt_client, mqtt_up_topic, &mqtt_message, NULL);
 
     if (status != MQTTCLIENT_SUCCESS)

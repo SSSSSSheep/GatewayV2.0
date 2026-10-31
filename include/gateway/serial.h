@@ -12,7 +12,7 @@
 int serial_open(const char *path);
 
 /**
- * @brief 从串口设备读取数据(阻塞读取)
+ * @brief 从串口设备读取数据；是否阻塞由文件描述符标志决定
  * @param fd 文件描述符
  * @param buffer 缓冲区
  * @param cappacity 缓冲区大小

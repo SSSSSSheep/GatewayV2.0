@@ -9,12 +9,12 @@
     msg_len:   1
     msg:       31
 
-  输出蓝牙数据格式（本例16字节）:
+  输出 AT+MESH 帧格式（本例16字节）:
  [0~6]     [7]   [8~9]   [10~11] [12]   [13]     [14~15]
  AT+MESH   00    00 02   01 01   01     31       0D 0A
- 头部      CMD   目标    源地址  长度   业务数据   CRLF
+ 头部      CMD   目标    源地址  长度   消息体     CRLF
 
- 源地址、长度为自定义业务头；总长度为15 + msg_len。
+ 源地址、长度为自定义协议字段；总长度为15 + msg_len。
  */
 jdy_at_status_t jdy_at_build(const gateway_message_t *msg,
                              uint8_t *out,
@@ -22,7 +22,6 @@ jdy_at_status_t jdy_at_build(const gateway_message_t *msg,
                              size_t *out_len)
 {
 
-    // 参数校验
     if (out_len == NULL)
     {
         return JDY_AT_ERR_ARGUMENT;
@@ -58,31 +57,23 @@ jdy_at_status_t jdy_at_build(const gateway_message_t *msg,
         return JDY_AT_ERR_NO_SPACE;
     }
 
-    /*
-     * 此处所有参数与长度检查均已完成。
-     * 后续操作不会再因参数错误提前退出。
-     */
     size_t offset = 0;
 
-    /* 下标0～6：只复制七个字符。 */
     memcpy(out + offset, "AT+MESH", 7);
     offset += 7;
 
-    /* 下标7：明确写入协议参数00。 */
     out[offset++] = 0x00;
 
-    /* 下标8～9：目标地址。 */
     memcpy(out + offset, msg->id, sizeof(msg->id));
     offset += sizeof(msg->id);
 
-    /* 下标10～11：自定义业务源地址0101。 */
+    /* 这是当前网关协议约定的源地址。 */
     out[offset++] = 0x01;
     out[offset++] = 0x01;
 
-    /* 下标12：自定义业务数据长度。 */
     out[offset++] = (uint8_t)msg->msg_len;
 
-    /* 下标13起：业务数据，允许包含00。 */
+    /* 按长度复制，不能用字符串函数；消息体允许包含 00。 */
     memcpy(out + offset, msg->msg, msg->msg_len);
     offset += msg->msg_len;
 

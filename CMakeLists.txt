@@ -238,6 +238,7 @@ target_link_libraries(main_demo
 add_library(gateway_device STATIC
     src/device/serial.c
     src/device/mqtt.c
+    src/device/serial_tx_queue.c
 )
 
 target_include_directories(gateway_device

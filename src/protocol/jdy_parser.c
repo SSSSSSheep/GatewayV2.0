@@ -31,7 +31,6 @@ jdy_parser_status_t parser_feed(jdy_parser_t *parser,
 {
     size_t i;
 
-    // 校验参数
     if (parser == NULL || (data == NULL && len != 0))
     {
         return JDY_PARSER_ERR_ARGUMENT;
@@ -61,13 +60,12 @@ jdy_parser_status_t parser_feed(jdy_parser_t *parser,
 jdy_parser_status_t parser_next(jdy_parser_t *parser,
                                 jdy_frame_t *out_frame)
 {
-    // 校验参数
     if (parser == NULL || out_frame == NULL)
     {
         return JDY_PARSER_ERR_ARGUMENT;
     }
 
-    // 缓冲区中还有数据
+    // 每消费一个字节就推进状态；半包状态留在上下文里，等后续输入继续解析。
     while (parser->buffered > 0)
     {
         uint8_t byte = parser->input[parser->read_pos];
@@ -81,14 +79,14 @@ jdy_parser_status_t parser_next(jdy_parser_t *parser,
         case JDY_STATE_WAIT_F1:
             if (byte == 0xF1)
             {
-                parser->state = JDY_STATE_WAIT_DD; // 找到帧头首字节
+                parser->state = JDY_STATE_WAIT_DD;
             }
             break;
 
         case JDY_STATE_WAIT_DD:
             if (byte == 0xDD)
             {
-                parser->state = JDY_STATE_WAIT_LENGTH; // 帧头完整
+                parser->state = JDY_STATE_WAIT_LENGTH;
             }
             else if (byte != 0xF1)
             {
@@ -102,11 +100,11 @@ jdy_parser_status_t parser_next(jdy_parser_t *parser,
             {
                 parser->body_length = byte;
                 parser->body_received = 0;
-                parser->state = JDY_STATE_RECEIVE_BODY; // 开始收 body
+                parser->state = JDY_STATE_RECEIVE_BODY;
             }
             else
             {
-                // 非法长度不作为帧；若当前字节是 F1，保留为候选帧头
+                // 长度非法时若当前字节是 F1，仍保留为候选帧头，避免错过重叠帧。
                 parser->state = (byte == 0xF1)
                                     ? JDY_STATE_WAIT_DD
                                     : JDY_STATE_WAIT_F1;
@@ -122,7 +120,7 @@ jdy_parser_status_t parser_next(jdy_parser_t *parser,
 
             parser->body[parser->body_received++] = byte;
 
-            // 如果当前以写入的body总字节数等于body长度，则认为帧接收完毕
+            // 防止状态异常时继续写出 body 数组边界。
             if (parser->body_received == parser->body_length)
             {
                 jdy_frame_t frame = {0};
@@ -135,16 +133,15 @@ jdy_parser_status_t parser_next(jdy_parser_t *parser,
                        parser->body + JDY_ADDRESS_SIZE,
                        JDY_ADDRESS_SIZE);
 
-                // 计算消息体长度
                 frame.payload_len =
                     parser->body_length - payload_offset;
                 memcpy(frame.payload,
                        parser->body + payload_offset,
                        frame.payload_len);
 
-                // 完整帧接收完毕，重置解析器
+                // 只重置当前帧状态，环形缓存里的后续字节留给下一次调用。
                 reset_frame(parser);
-                *out_frame = frame; // 一次调用最多输出一帧
+                *out_frame = frame;
                 return JDY_PARSER_OK;
             }
             break;

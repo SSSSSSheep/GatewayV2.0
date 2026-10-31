@@ -6,15 +6,15 @@
 
 /*
  * 暂按当前协议文档采用 L=5～16：
- * body包含源地址、目标地址和业务负载。
- * 两组地址占4字节，业务负载为1～12字节。
+ * 帧体包含源地址、目标地址和消息体。
+ * 两组地址占4字节，消息体为1～12字节。
  * 模块实际长度范围仍需手册或抓包确认。
  */
-#define JDY_MIN_BODY_SIZE 5  // body最小长度
-#define JDY_MAX_BODY_SIZE 16 // body最大长度
+#define JDY_MIN_BODY_SIZE 5  // 帧体最小长度
+#define JDY_MAX_BODY_SIZE 16 // 帧体最大长度
 #define JDY_ADDRESS_SIZE 2   // 单个地址长度
 
-// 最大业务负载长度 = 最大body长度 - 源地址长度 - 目标地址长度
+// 消息体上限由帧体上限扣除两组地址长度得到。
 #define JDY_MAX_PAYLOAD_SIZE \
     (JDY_MAX_BODY_SIZE - 2 * JDY_ADDRESS_SIZE)
 
@@ -27,7 +27,7 @@ typedef enum
     JDY_STATE_WAIT_F1 = 0, // 等待帧头 F1
     JDY_STATE_WAIT_DD,     // 收到F1 等待帧头 DD
     JDY_STATE_WAIT_LENGTH, // 收到F1 DD 等待body长度
-    JDY_STATE_RECEIVE_BODY // 接收源地址、目标地址和业务负载
+    JDY_STATE_RECEIVE_BODY // 接收源地址、目标地址和消息体
 } jdy_parser_state_t;
 
 // 解析器状态码
@@ -46,10 +46,10 @@ typedef enum
  * 输出：
  *   source      = 23 23
  *   destination = FF FF
- *   payload_len = 3
- *   payload     = 41 42 43
+ *   消息体长度 = 3
+ *   消息体     = 41 42 43
  *
- * payload保持原始字节，不解析自定义业务头。
+ * 消息体保留原始字节，通用帧解析器不解释其内部格式。
  */
 typedef struct
 {
@@ -68,56 +68,38 @@ typedef struct
     size_t buffered;                       // 环形缓冲区中尚未读取的有效字节数
 
     jdy_parser_state_t state;        // 当前状态机状态
-    uint8_t body[JDY_MAX_BODY_SIZE]; // 当前帧body：源地址、目标地址和消息体
-    size_t body_length;              // 长度字段指定的body总长度，不包含帧头和长度字节
-    size_t body_received;            // 当前帧body已接收的字节数
+    uint8_t body[JDY_MAX_BODY_SIZE]; // 当前帧体：源地址、目标地址和消息体
+    size_t body_length;              // 长度字段指定的帧体总长度，不含帧头和长度字节
+    size_t body_received;            // 当前帧体已接收的字节数
 } jdy_parser_t;
-
-/*
- * 初始化或重置上下文，丢弃所有缓存及半包。
- * parser为空时返回参数错误。
- */
 
 /**
  * @brief 初始化或重置上下文，丢弃所有缓存及半包。
  * @param parser 解析器上下文
- * @return jdy_parser_status_t
+ * @return JDY_PARSER_OK 表示成功；parser 为空时返回 JDY_PARSER_ERR_ARGUMENT。
  */
 jdy_parser_status_t parser_init(jdy_parser_t *parser);
 
-/*
- * 将字节追加到输入缓存，不推进状态机。
- *
- * 成功：本次数据全部接收。
- * 空间不足：返回NO_SPACE，本次数据一个字节也不接收。
- * len为0时允许data为NULL；parser必须有效。
- */
 /**
  * @brief 将字节追加到输入缓存，不推进状态机。
  * @param parser 解析器上下文
  * @param data 输入数据
  * @param len 输入数据长度
- * @return jdy_parser_status_t
+ * @return JDY_PARSER_OK 表示全部接收；空间不足时返回 JDY_PARSER_ERR_NO_SPACE
+ *         且不接收任何字节；参数无效时返回 JDY_PARSER_ERR_ARGUMENT。
+ *         len 为 0 时 data 可为空。
  */
 jdy_parser_status_t parser_feed(jdy_parser_t *parser,
                                 const uint8_t *data,
                                 size_t len);
 
-/*
- * 消费缓存并推进状态机，每次最多输出一帧。
- *
- * OK：输出完整帧，状态复位；剩余输入保留。
- * NEED_MORE：没有完整帧，保留半包状态，out_frame不变。
- * 参数错误：返回ERR_ARGUMENT。
- *
- * 噪声及非法长度会被跳过，再继续寻找帧头。
- * parser与out_frame的存储区域不得重叠。
- */
 /**
  * @brief 消费缓存并推进状态机，每次最多输出一帧。
  * @param parser 解析器上下文
  * @param out_frame 输出帧
- * @return jdy_parser_status_t
+ * @return JDY_PARSER_OK 表示输出一帧；JDY_PARSER_NEED_MORE 表示保留半包
+ *         状态且 out_frame 不变；参数无效时返回 JDY_PARSER_ERR_ARGUMENT。
+ *         噪声和非法长度会被跳过；parser 与 out_frame 不得重叠。
  */
 jdy_parser_status_t parser_next(jdy_parser_t *parser,
                                 jdy_frame_t *out_frame);

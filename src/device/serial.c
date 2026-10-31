@@ -7,7 +7,7 @@
 
 int serial_open(const char *path)
 {
-    // 使用阻塞模式 O_NOCTTY 避免串口成为进程的控制终端
+    // O_NOCTTY 防止串口被进程意外设为控制终端。
     int fd = open(path, O_RDWR | O_NOCTTY);
     if (fd < 0)
     {
@@ -24,10 +24,11 @@ int serial_open(const char *path)
         return -1;
     }
 
-    // 原始字节模式 不转换回车换行 不会显 不等待整行
+    // 清除行规程处理，避免二进制帧被改写或等到换行才交给读取端。
     options.c_cflag = 0;
     options.c_oflag = 0;
     options.c_iflag = 0;
+    options.c_lflag = 0;
 
     // 8N1 启用接收 忽略调制解调器控制线
     options.c_cflag &= ~(tcflag_t)(CSIZE | PARENB | CSTOPB);
@@ -37,7 +38,7 @@ int serial_open(const char *path)
     options.c_cflag &= ~(tcflag_t)CRTSCTS; // 关闭硬件流控
 #endif
 
-    // 至少收到1字节才返回 不设置读取超时
+    // 阻塞模式下至少等到1字节；IO 循环之后会把文件描述符设为非阻塞。
     options.c_cc[VMIN] = 1;
     options.c_cc[VTIME] = 0;
 
