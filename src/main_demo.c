@@ -9,6 +9,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include "gateway/message_json.h"
 #include "gateway/serial.h"
@@ -91,9 +92,19 @@ int main(void)
 
     /*
      * PC测试使用socat创建的虚拟串口。
-     * 上板时改为RK3568实际设备，例如 /dev/ttyS3。
+     * 可通过环境变量指定设备，默认使用板端串口。
      */
-    const char *serial_path = "/dev/ttyS3";
+    /* 环境变量允许同一二进制适配不同部署，未设置时使用当前板端默认值。 */
+    const char *serial_path = getenv("GATEWAY_SERIAL_DEVICE");
+    if (serial_path == NULL || serial_path[0] == 0) serial_path = "/dev/ttyS3";
+    const char *broker_address = getenv("GATEWAY_BROKER_URL");
+    if (broker_address == NULL || broker_address[0] == 0) broker_address = "tcp://192.168.0.105:1883";
+    const char *client_id = getenv("GATEWAY_MQTT_CLIENT_ID");
+    if (client_id == NULL || client_id[0] == 0) client_id = "rk_gateway_v2_pc";
+    const char *down_topic = getenv("GATEWAY_MQTT_DOWN_TOPIC");
+    if (down_topic == NULL || down_topic[0] == 0) down_topic = "gateway/down";
+    const char *up_topic = getenv("GATEWAY_MQTT_UP_TOPIC");
+    if (up_topic == NULL || up_topic[0] == 0) up_topic = "gateway/up";
 
     printf("=== 4. 打开串口 ===\n");
     printf("设备：%s，115200 8N1\n", serial_path);
@@ -115,10 +126,10 @@ int main(void)
     }
 
     gateway_mqtt_config_t mqtt_config = {
-        .broker_address = "tcp://192.168.0.105:1883",
-        .client_id = "rk_gateway_v2_pc",
-        .topic = "gateway/down",
-        .up_topic = "gateway/up",
+        .broker_address = broker_address,
+        .client_id = client_id,
+        .topic = down_topic,
+        .up_topic = up_topic,
         .tx_queue = &tx_queue,
         .serial_fd = fd};
 
@@ -145,7 +156,7 @@ int main(void)
     }
 
     printf("=== 5. 等待MQTT下行消息 ===\n");
-    printf("主题：gateway/down\n");
+    printf("主题：%s\n", down_topic);
     printf("按 Ctrl+C 结束程序。\n");
     fflush(stdout);
 

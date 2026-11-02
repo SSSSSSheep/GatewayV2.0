@@ -9,7 +9,14 @@ LOCAL_LOG="${LOCAL_LOG:-build/rk-uplink-10s-gateway.log}"
 MQTT_LOG="${MQTT_LOG:-build/rk-uplink-10s-broker.log}"
 MQTT_HOST="${MQTT_HOST:-192.168.0.105}"
 MQTT_PORT="${MQTT_PORT:-1883}"
-MQTT_TOPIC="${MQTT_TOPIC:-gateway/up}"
+MQTT_TOPIC="${MQTT_TOPIC:-${GATEWAY_MQTT_UP_TOPIC:-gateway/up}}"
+# 将测试脚本配置同步传给板端网关进程。
+GATEWAY_BROKER_URL="${GATEWAY_BROKER_URL:-tcp://${MQTT_HOST}:${MQTT_PORT}}"
+GATEWAY_SERIAL_DEVICE="${GATEWAY_SERIAL_DEVICE:-/dev/ttyS3}"
+GATEWAY_MQTT_CLIENT_ID="${GATEWAY_MQTT_CLIENT_ID:-rk_gateway_v2_pc}"
+GATEWAY_MQTT_DOWN_TOPIC="${GATEWAY_MQTT_DOWN_TOPIC:-gateway/down}"
+GATEWAY_MQTT_UP_TOPIC="${GATEWAY_MQTT_UP_TOPIC:-$MQTT_TOPIC}"
+printf -v REMOTE_GATEWAY_ENV "GATEWAY_BROKER_URL=%q GATEWAY_SERIAL_DEVICE=%q GATEWAY_MQTT_CLIENT_ID=%q GATEWAY_MQTT_DOWN_TOPIC=%q GATEWAY_MQTT_UP_TOPIC=%q" "$GATEWAY_BROKER_URL" "$GATEWAY_SERIAL_DEVICE" "$GATEWAY_MQTT_CLIENT_ID" "$GATEWAY_MQTT_DOWN_TOPIC" "$GATEWAY_MQTT_UP_TOPIC"
 
 for cmd in make sshpass ssh scp; do
     command -v "$cmd" >/dev/null 2>&1 || {
@@ -74,7 +81,7 @@ sshpass -e scp "${SSH_OPTS[@]}" \
     "$RK_LOCAL_BINARY" "$RK_HOST:$RK_REMOTE_BINARY"
 
 printf '== 板端运行 10 秒并保存日志 ==\n'
-sshpass -e ssh "${SSH_OPTS[@]}" "$RK_HOST" 'sh -s' <<'REMOTE'
+sshpass -e ssh "${SSH_OPTS[@]}" "$RK_HOST" "env $REMOTE_GATEWAY_ENV sh -s" <<'REMOTE'
 set -eu
 
 BIN=/tmp/main_demo
