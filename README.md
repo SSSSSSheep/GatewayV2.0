@@ -63,3 +63,7 @@ sudo journalctl -fu rk-gateway.service
 ```
 
 管理服务：`sudo systemctl stop rk-gateway.service` 停止，`sudo systemctl start rk-gateway.service` 启动。当前 unit 使用 `Restart=on-failure`，并通过 `stdbuf` 将程序日志实时写入 journal。部署到其他设备时，修改环境文件中的串口、Broker、主题，并为每台网关设置不同的 Client ID。
+
+## MQTT 消息投递边界
+
+上下行 MQTT 当前均使用 QoS 0，不要求 Broker 确认收到。上行消息先进入容量为 64 条的内存队列；队列满时拒收新消息。遇到 MQTT 断连错误时，发布线程会在内存中保留当前消息并重连后重试；其他发布错误只记录日志，该消息不会重试。进程退出或崩溃时，尚未发布的消息不会写入磁盘，因此可能丢失。此策略适用于允许丢样的周期遥测，不保证命令或告警可靠送达。
