@@ -33,3 +33,33 @@ RK_HOST=cat@192.168.0.107 MQTT_HOST=192.168.0.105 scripts/test-rk-uplink-10s.sh
 ```
 
 脚本支持 `RK_HOST`、`MQTT_HOST`、`MQTT_PORT`、`MQTT_TOPIC` 和上述 `GATEWAY_*` 环境变量；设置 `GATEWAY_MQTT_UP_TOPIC` 时，测试脚本会同步订阅该主题。日志默认保存在 `build/rk-uplink-10s-gateway.log` 和 `build/rk-uplink-10s-broker.log`。
+
+## 板端 systemd 部署
+
+从 Ubuntu 工程目录将程序和部署文件上传到板端：
+
+```bash
+scp build/rk3568-aarch64-sysroot/main_demo cat@192.168.0.107:/tmp/main_demo
+scp deploy/rk-gateway.service cat@192.168.0.107:/tmp/rk-gateway.service
+scp deploy/rk-gateway.env.example cat@192.168.0.107:/tmp/rk-gateway.env
+```
+
+在板端安装文件并启用服务：
+
+```bash
+sudo install -m 0755 /tmp/main_demo /usr/local/bin/rk-gateway
+sudo install -m 0644 /tmp/rk-gateway.env /etc/default/rk-gateway
+sudo install -m 0644 /tmp/rk-gateway.service /etc/systemd/system/rk-gateway.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now rk-gateway.service
+```
+
+查看运行状态和实时日志：
+
+```bash
+systemctl is-enabled rk-gateway.service
+systemctl is-active rk-gateway.service
+sudo journalctl -fu rk-gateway.service
+```
+
+管理服务：`sudo systemctl stop rk-gateway.service` 停止，`sudo systemctl start rk-gateway.service` 启动。当前 unit 使用 `Restart=on-failure`，并通过 `stdbuf` 将程序日志实时写入 journal。部署到其他设备时，修改环境文件中的串口、Broker、主题，并为每台网关设置不同的 Client ID。

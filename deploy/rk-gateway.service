@@ -1,0 +1,21 @@
+[Unit]
+Description=RK Gateway Serial MQTT Bridge
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=cat
+SupplementaryGroups=dialout
+EnvironmentFile=/etc/default/rk-gateway
+WorkingDirectory=/
+ExecStart=/usr/bin/stdbuf -oL -eL /usr/local/bin/rk-gateway
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=15
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
