@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-RK_HOST="${RK_HOST:-cat@192.168.0.105}"
+RK_HOST="${RK_HOST:-cat@192.168.0.107}"
 RK_LOCAL_BINARY="${RK_LOCAL_BINARY:-build/rk3568-aarch64-sysroot/main_demo}"
 RK_REMOTE_BINARY="/tmp/main_demo"
 RK_REMOTE_LOG="/tmp/gateway.log"
 LOCAL_LOG="${LOCAL_LOG:-build/rk-uplink-10s-gateway.log}"
 MQTT_LOG="${MQTT_LOG:-build/rk-uplink-10s-broker.log}"
-MQTT_HOST="${MQTT_HOST:-192.168.0.101}"
+MQTT_HOST="${MQTT_HOST:-192.168.0.105}"
 MQTT_PORT="${MQTT_PORT:-1883}"
 MQTT_TOPIC="${MQTT_TOPIC:-gateway/up}"
 

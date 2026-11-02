@@ -115,7 +115,7 @@ int main(void)
     }
 
     gateway_mqtt_config_t mqtt_config = {
-        .broker_address = "tcp://192.168.0.101:1883",
+        .broker_address = "tcp://192.168.0.105:1883",
         .client_id = "rk_gateway_v2_pc",
         .topic = "gateway/down",
         .up_topic = "gateway/up",

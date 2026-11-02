@@ -145,7 +145,6 @@ static int process_serial_input(io_loop_ctx_t *ctx)
         {
             if (errno == EAGAIN || errno == EWOULDBLOCK)
             {
-                fprintf(stderr, "[诊断] 串口 read 返回 EAGAIN\n");
                 // 当前内核接收缓冲已读空，回到 epoll 等下一批字节。
                 return 0;
             }
@@ -165,7 +164,6 @@ static int process_serial_input(io_loop_ctx_t *ctx)
             return 0;
         }
 
-        fprintf(stderr, "[诊断] 串口 read 到 %zd 字节\n", read_len);
 
         jdy_parser_status_t feed_status = parser_feed(
             &ctx->parser,
@@ -521,8 +519,6 @@ int io_loop_run(int serial_fd, gateway_serial_tx_queue_t *tx_queue)
                 return -1;
             }
 
-            fprintf(stderr, "[诊断] epoll返回 kind=%d events=0x%x\n",
-                    (int)watch->kind, ready_events);
             if (watch->kind == IO_LOOP_WATCH_SIGNAL)
             {
                 struct signalfd_siginfo signal_info;
