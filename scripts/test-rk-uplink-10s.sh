@@ -16,9 +16,10 @@ GATEWAY_SERIAL_DEVICE="${GATEWAY_SERIAL_DEVICE:-/dev/ttyS3}"
 GATEWAY_MQTT_CLIENT_ID="${GATEWAY_MQTT_CLIENT_ID:-rk_gateway_v2_pc}"
 GATEWAY_MQTT_DOWN_TOPIC="${GATEWAY_MQTT_DOWN_TOPIC:-gateway/down}"
 GATEWAY_MQTT_UP_TOPIC="${GATEWAY_MQTT_UP_TOPIC:-$MQTT_TOPIC}"
+DOWNLINK_JSON='{"conn_type":1,"id":"0002","msg":"30"}'
 printf -v REMOTE_GATEWAY_ENV "GATEWAY_BROKER_URL=%q GATEWAY_SERIAL_DEVICE=%q GATEWAY_MQTT_CLIENT_ID=%q GATEWAY_MQTT_DOWN_TOPIC=%q GATEWAY_MQTT_UP_TOPIC=%q" "$GATEWAY_BROKER_URL" "$GATEWAY_SERIAL_DEVICE" "$GATEWAY_MQTT_CLIENT_ID" "$GATEWAY_MQTT_DOWN_TOPIC" "$GATEWAY_MQTT_UP_TOPIC"
 
-for cmd in make sshpass ssh scp; do
+for cmd in make sshpass ssh scp mosquitto_sub mosquitto_pub timeout; do
     command -v "$cmd" >/dev/null 2>&1 || {
         printf '缺少命令：%s\n' "$cmd" >&2
         exit 1
@@ -44,7 +45,12 @@ SSH_OPTS=(
 )
 
 SUB_PID=""
+PUB_PID=""
 cleanup() {
+    if [[ -n "$PUB_PID" ]]; then
+        kill "$PUB_PID" 2>/dev/null || true
+        wait "$PUB_PID" 2>/dev/null || true
+    fi
     if [[ -n "$SUB_PID" ]]; then
         kill "$SUB_PID" 2>/dev/null || true
         wait "$SUB_PID" 2>/dev/null || true
@@ -81,6 +87,8 @@ sshpass -e scp "${SSH_OPTS[@]}" \
     "$RK_LOCAL_BINARY" "$RK_HOST:$RK_REMOTE_BINARY"
 
 printf '== 板端运行 10 秒并保存日志 ==\n'
+(sleep 3; mosquitto_pub -h "$MQTT_HOST" -p "$MQTT_PORT" -t "$GATEWAY_MQTT_DOWN_TOPIC" -m "$DOWNLINK_JSON") &
+PUB_PID=$!
 sshpass -e ssh "${SSH_OPTS[@]}" "$RK_HOST" "env $REMOTE_GATEWAY_ENV sh -s" <<'REMOTE'
 set -eu
 
@@ -101,20 +109,30 @@ fi
 stdbuf -oL -eL "$BIN" >"$LOG" 2>&1 </dev/null &
 pid=$!
 
-sleep 35
+sleep 10
 
 if kill -0 "$pid" 2>/dev/null; then
     kill -TERM "$pid" 2>/dev/null || true
 fi
-wait "$pid" 2>/dev/null || true
+wait "$pid"
 printf '板端测试结束，日志保存在 %s\n' "$LOG"
 REMOTE
 
+if ! wait "$PUB_PID"; then
+    printf "MQTT 下行测试消息发布失败" >&2
+    exit 1
+fi
+PUB_PID=""
 printf '== 拉取板端日志 ==\n'
 sshpass -e scp "${SSH_OPTS[@]}" \
     "$RK_HOST:$RK_REMOTE_LOG" "$LOCAL_LOG"
 
 printf '\n板端日志：%s\n' "$LOCAL_LOG"
+grep -Fq "MQTT收到主题：$GATEWAY_MQTT_DOWN_TOPIC" "$LOCAL_LOG" || { printf "板端未收到下行主题" >&2; exit 1; }
+grep -Fq "串口写入：16/16 字节" "$LOCAL_LOG" || { printf "板端未完整写出串口帧" >&2; exit 1; }
+grep -Fq "收到退出信号，正在清理资源" "$LOCAL_LOG" || { printf "板端未正常记录退出清理" >&2; exit 1; }
+grep -Fq "$GATEWAY_MQTT_UP_TOPIC " "$MQTT_LOG" || { printf "Broker 未收到预期上行主题" >&2; exit 1; }
+echo "上下行集成测试通过"
 if [[ -f "$MQTT_LOG" ]]; then
     printf 'Broker 收到的上行消息：%s\n' "$MQTT_LOG"
 fi
