@@ -1,0 +1,611 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>RK Gateway Console</title>
+    <script src="https://unpkg.com/mqtt@5.10.4/dist/mqtt.min.js"></script>
+    <style>
+        :root {
+            font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+            color: #19232e;
+            background: #f3f5f7;
+            font-synthesis: none;
+            text-rendering: optimizeLegibility;
+            --line: #dce2e7;
+            --muted: #63717d;
+            --green: #16794c;
+            --red: #b42318;
+            --blue: #1769aa;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-width: 320px;
+        }
+
+        button,
+        input,
+        select {
+            font: inherit;
+        }
+
+        button {
+            cursor: pointer;
+        }
+
+        .topbar {
+            min-height: 58px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 18px;
+            padding: 0 24px;
+            background: #fff;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .brand {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            font-size: 16px;
+            font-weight: 700;
+        }
+
+        .brand-mark {
+            width: 25px;
+            height: 25px;
+            display: grid;
+            place-items: center;
+            border-radius: 5px;
+            background: #1769aa;
+            color: white;
+            font-size: 14px;
+        }
+
+        .connection-state {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: #9aa5ae;
+        }
+
+        .dot.connected {
+            background: #1c9a61;
+            box-shadow: 0 0 0 3px #dff4e9;
+        }
+
+        .dot.connecting {
+            background: #d58a14;
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: minmax(285px, 330px) minmax(0, 1fr);
+            min-height: calc(100vh - 58px);
+        }
+
+        aside {
+            padding: 21px 18px;
+            background: #fff;
+            border-right: 1px solid var(--line);
+        }
+
+        main {
+            min-width: 0;
+            padding: 22px 24px;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 21px;
+            font-weight: 650;
+        }
+
+        h2 {
+            margin: 0;
+            font-size: 15px;
+            font-weight: 650;
+        }
+
+        .subhead {
+            margin: 6px 0 20px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .section-title {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin: 0 0 13px;
+        }
+
+        .field {
+            display: grid;
+            gap: 6px;
+            margin: 0 0 13px;
+        }
+
+        label {
+            color: #4a5965;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        input,
+        select {
+            width: 100%;
+            min-width: 0;
+            height: 37px;
+            padding: 0 10px;
+            color: #19232e;
+            background: #fff;
+            border: 1px solid #cbd4dc;
+            border-radius: 4px;
+            outline: none;
+        }
+
+        input:focus,
+        select:focus {
+            border-color: #4f91c5;
+            box-shadow: 0 0 0 2px #dceefa;
+        }
+
+        input::placeholder {
+            color: #9aa5ae;
+        }
+
+        .button-row {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn {
+            min-height: 36px;
+            padding: 0 12px;
+            border: 1px solid #cbd4dc;
+            border-radius: 4px;
+            color: #273643;
+            background: #fff;
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .btn:hover {
+            background: #f3f6f8;
+        }
+
+        .btn.primary {
+            color: white;
+            border-color: #1769aa;
+            background: #1769aa;
+        }
+
+        .btn.primary:hover {
+            background: #12578e;
+        }
+
+        .btn:disabled {
+            cursor: not-allowed;
+            opacity: .52;
+        }
+
+        .btn.full {
+            width: 100%;
+        }
+
+        .divider {
+            height: 1px;
+            margin: 21px 0;
+            background: var(--line);
+        }
+
+        .form-error {
+            min-height: 16px;
+            margin: 8px 0 0;
+            color: var(--red);
+            font-size: 12px;
+        }
+
+        .hint {
+            margin: 7px 0 0;
+            color: var(--muted);
+            font-size: 11px;
+            line-height: 1.5;
+        }
+
+        .toolbar {
+            display: flex;
+            align-items: end;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 13px;
+        }
+
+        .toolbar-actions {
+            display: flex;
+            gap: 7px;
+            align-items: center;
+        }
+
+        .toolbar .field {
+            width: min(260px, 42%);
+            margin: 0;
+        }
+
+        .metrics {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 18px;
+            margin: 2px 0 14px;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .metrics strong {
+            color: #263541;
+            font-weight: 650;
+        }
+
+        .table-wrap {
+            overflow: auto;
+            border: 1px solid var(--line);
+            border-radius: 5px;
+            background: white;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+
+        th {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            text-align: left;
+            color: #53616c;
+            background: #f7f9fa;
+            font-weight: 650;
+        }
+
+        th,
+        td {
+            padding: 10px 11px;
+            border-bottom: 1px solid #e8ecef;
+            vertical-align: top;
+        }
+
+        tbody tr:last-child td {
+            border-bottom: 0;
+        }
+
+        tbody tr:hover {
+            background: #f8fbfd;
+        }
+
+        td.time {
+            width: 112px;
+            white-space: nowrap;
+            color: #697783;
+            font-variant-numeric: tabular-nums;
+        }
+
+        td.topic {
+            width: 130px;
+            white-space: nowrap;
+            color: var(--blue);
+            font-weight: 600;
+        }
+
+        td.payload {
+            font-family: Consolas, "SFMono-Regular", monospace;
+            word-break: break-all;
+            white-space: pre-wrap;
+        }
+
+        .empty {
+            padding: 42px 16px;
+            text-align: center;
+            color: #7d8992;
+        }
+
+        .status-text {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .toast {
+            position: fixed;
+            right: 20px;
+            bottom: 20px;
+            max-width: min(420px, calc(100vw - 40px));
+            padding: 11px 14px;
+            border-radius: 4px;
+            color: white;
+            background: #263541;
+            box-shadow: 0 5px 22px #17212b2a;
+            font-size: 13px;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(8px);
+            transition: .18s ease;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        @media (max-width: 760px) {
+            .topbar {
+                padding: 0 15px;
+            }
+
+            .layout {
+                grid-template-columns: 1fr;
+            }
+
+            aside {
+                border-right: 0;
+                border-bottom: 1px solid var(--line);
+                padding: 18px 15px;
+            }
+
+            main {
+                padding: 19px 15px;
+            }
+
+            .toolbar {
+                align-items: stretch;
+                flex-direction: column;
+            }
+
+            .toolbar .field {
+                width: 100%;
+            }
+
+            .toolbar-actions {
+                justify-content: flex-end;
+            }
+
+            td.time {
+                width: 91px;
+            }
+
+            td.topic {
+                width: 100px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <header class="topbar">
+        <div class="brand"><span class="brand-mark">RK</span><span>Gateway Console</span></div>
+        <div class="connection-state" aria-live="polite"><span id="stateDot" class="dot"></span><span
+                id="stateLabel">未连接</span></div>
+    </header>
+    <div class="layout">
+        <aside>
+            <div class="section-title">
+                <h2>Broker 连接</h2>
+            </div>
+            <form id="connectionForm">
+                <div class="field"><label for="brokerUrl">WebSocket 地址</label><input id="brokerUrl"
+                        value="ws://192.168.0.104:8083" required></div>
+                <div class="field"><label for="upTopic">上行主题</label><input id="upTopic" value="gateway/up" required>
+                </div>
+                <div class="field"><label for="downTopic">下行主题</label><input id="downTopic" value="gateway/down"
+                        required></div>
+                <div class="field"><label for="clientId">客户端 ID</label><input id="clientId" maxlength="64"></div>
+                <div class="button-row"><button class="btn primary full" id="connectButton"
+                        type="submit">连接</button><button class="btn full" id="disconnectButton" type="button"
+                        disabled>断开</button></div>
+                <p class="form-error" id="connectionError" role="alert"></p>
+            </form>
+            <div class="divider"></div>
+            <div class="section-title">
+                <h2>发送下行指令</h2>
+            </div>
+            <form id="commandForm">
+                <div class="field"><label for="connType">连接类型</label><select id="connType">
+                        <option value="1">蓝牙 (1)</option>
+                    </select></div>
+                <div class="field"><label for="deviceId">设备 ID（4 位十六进制）</label><input id="deviceId" value="0002"
+                        maxlength="4" pattern="[0-9a-fA-F]{4}" required></div>
+                <div class="field"><label for="messageHex">消息体（十六进制字节）</label><input id="messageHex" value="30"
+                        placeholder="例如 30 或 3132" pattern="(?:[0-9a-fA-F]{2})+" required></div>
+                <button class="btn primary full" id="sendButton" type="submit" disabled>发送到下位机</button>
+                <p class="hint">消息体按十六进制字节发送，例如 <code>30</code> 表示 ASCII 字符 0。</p>
+                <p class="form-error" id="commandError" role="alert"></p>
+            </form>
+        </aside>
+        <main>
+            <div class="toolbar">
+                <div>
+                    <h1>上行数据</h1>
+                    <p class="subhead">实时接收下位机经网关转发的数据</p>
+                </div>
+                <div class="field"><label for="filterInput">筛选消息</label><input id="filterInput" placeholder="按主题或内容筛选">
+                </div>
+                <div class="toolbar-actions"><button class="btn" id="pauseButton" type="button"
+                        disabled>暂停显示</button><button class="btn" id="clearButton" type="button">清空记录</button></div>
+            </div>
+            <div class="metrics"><span>收到 <strong id="receivedCount">0</strong> 条</span><span>最近消息 <strong
+                        id="lastMessage">暂无</strong></span></div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>接收时间</th>
+                            <th>主题</th>
+                            <th>消息内容</th>
+                        </tr>
+                    </thead>
+                    <tbody id="messageRows">
+                        <tr>
+                            <td class="empty" colspan="3">连接 Broker 后等待上行数据</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <p id="feedStatus" class="status-text"></p>
+        </main>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script>
+        (() => {
+            const $ = (id) => document.getElementById(id);
+            const clientIdInput = $("clientId");
+            clientIdInput.value = `rk_web_${Math.random().toString(16).slice(2, 10)}`;
+            let client = null;
+            let isConnected = false;
+            let paused = false;
+            let totalReceived = 0;
+            let messages = [];
+            let toastTimer = null;
+
+            const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => ({
+                "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+            })[char]);
+
+            function setStatus(label, state = "") {
+                $("stateLabel").textContent = label;
+                $("stateDot").className = `dot ${state}`;
+                $("sendButton").disabled = !isConnected;
+                $("disconnectButton").disabled = !client;
+                $("pauseButton").disabled = !isConnected;
+                $("connectButton").disabled = Boolean(client);
+            }
+
+            function notify(message) {
+                const toast = $("toast");
+                toast.textContent = message;
+                toast.classList.add("show");
+                clearTimeout(toastTimer);
+                toastTimer = setTimeout(() => toast.classList.remove("show"), 2600);
+            }
+
+            function renderMessages() {
+                const query = $("filterInput").value.trim().toLowerCase();
+                const visible = messages.filter((item) => `${item.topic} ${item.payload}`.toLowerCase().includes(query));
+                const body = $("messageRows");
+                if (!visible.length) {
+                    body.innerHTML = `<tr><td class="empty" colspan="3">${messages.length ? "没有匹配的消息" : "连接 Broker 后等待上行数据"}</td></tr>`;
+                    return;
+                }
+                body.innerHTML = visible.map((item) => `<tr><td class="time">${escapeHtml(item.time)}</td><td class="topic">${escapeHtml(item.topic)}</td><td class="payload">${escapeHtml(item.payload)}</td></tr>`).join("");
+            }
+
+            function connect() {
+                if (!window.mqtt) {
+                    $("connectionError").textContent = "MQTT 客户端库加载失败，请检查网络后刷新页面。";
+                    return;
+                }
+                const url = $("brokerUrl").value.trim();
+                const upTopic = $("upTopic").value.trim();
+                const id = clientIdInput.value.trim();
+                if (!url || !upTopic || !id) {
+                    $("connectionError").textContent = "请填写 WebSocket 地址、上行主题和客户端 ID。";
+                    return;
+                }
+                $("connectionError").textContent = "";
+                setStatus("连接中", "connecting");
+                client = mqtt.connect(url, { clientId: id, clean: true, connectTimeout: 8000, reconnectPeriod: 2500, keepalive: 30 });
+                client.on("connect", () => {
+                    isConnected = true;
+                    setStatus("已连接", "connected");
+                    client.subscribe(upTopic, { qos: 0 }, (error) => {
+                        if (error) {
+                            $("connectionError").textContent = `订阅失败：${error.message}`;
+                            return;
+                        }
+                        $("feedStatus").textContent = `正在监听 ${upTopic}`;
+                    });
+                });
+                client.on("reconnect", () => { isConnected = false; setStatus("重连中", "connecting"); });
+                client.on("offline", () => { isConnected = false; setStatus("连接离线"); });
+                client.on("close", () => { isConnected = false; setStatus("连接已断开"); });
+                client.on("error", (error) => {
+                    $("connectionError").textContent = `连接错误：${error.message}`;
+                });
+                client.on("message", (topic, payload) => {
+                    totalReceived += 1;
+                    const decoded = new TextDecoder().decode(payload);
+                    messages.unshift({ time: new Date().toLocaleTimeString("zh-CN", { hour12: false }), topic, payload: decoded });
+                    if (messages.length > 500) messages.length = 500;
+                    $("receivedCount").textContent = totalReceived;
+                    $("lastMessage").textContent = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+                    if (!paused) renderMessages();
+                });
+            }
+
+            $("connectionForm").addEventListener("submit", (event) => { event.preventDefault(); connect(); });
+            $("disconnectButton").addEventListener("click", () => {
+                if (client) client.end(true);
+                client = null;
+                isConnected = false;
+                setStatus("未连接");
+                $("feedStatus").textContent = "";
+            });
+            $("commandForm").addEventListener("submit", (event) => {
+                event.preventDefault();
+                $("commandError").textContent = "";
+                if (!client || !isConnected) return;
+                const topic = $("downTopic").value.trim();
+                const id = $("deviceId").value.trim().toUpperCase();
+                const hex = $("messageHex").value.trim().replace(/\s+/g, "");
+                if (!/^[0-9a-fA-F]{4}$/.test(id)) {
+                    $("commandError").textContent = "设备 ID 必须是 4 位十六进制数。";
+                    return;
+                }
+                if (!/^(?:[0-9a-fA-F]{2})+$/.test(hex)) {
+                    $("commandError").textContent = "消息体必须由完整的十六进制字节组成。";
+                    return;
+                }
+                const payload = JSON.stringify({ conn_type: Number($("connType").value), id, msg: hex.toUpperCase() });
+                client.publish(topic, payload, { qos: 0, retain: false }, (error) => {
+                    if (error) {
+                        $("commandError").textContent = `发送失败：${error.message}`;
+                        return;
+                    }
+                    notify(`已发布到 ${topic}`);
+                });
+            });
+            $("filterInput").addEventListener("input", renderMessages);
+            $("clearButton").addEventListener("click", () => {
+                messages = [];
+                totalReceived = 0;
+                $("receivedCount").textContent = "0";
+                $("lastMessage").textContent = "暂无";
+                renderMessages();
+            });
+            $("pauseButton").addEventListener("click", () => {
+                paused = !paused;
+                $("pauseButton").textContent = paused ? "恢复显示" : "暂停显示";
+                if (!paused) renderMessages();
+            });
+            setStatus("未连接");
+        })();
+    </script>
+</body>
+
+</html>
