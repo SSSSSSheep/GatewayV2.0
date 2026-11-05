@@ -11,6 +11,9 @@ typedef struct
     const char *client_id;               // MQTT客户端ID
     const char *topic;                   // 订阅的主题，例如 "gateway/commands"
     const char *up_topic;                // 发布上行消息的主题
+    const char *username;                // 可选用户名，仅通过 TLS 发送
+    const char *password;                // 可选密码，仅通过 TLS 发送
+    const char *tls_ca_file;             // 可选 CA 文件路径；为空时使用系统默认信任路径
     gateway_serial_tx_queue_t *tx_queue; // 串口发送队列，供 MQTT 下行回调投递指令帧
     int serial_fd;                       // 串口文件描述符
 } gateway_mqtt_config_t;

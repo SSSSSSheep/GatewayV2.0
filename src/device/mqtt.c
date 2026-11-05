@@ -37,6 +37,10 @@ static int mqtt_started = 0;    // MQTT是否已经启动
 static const char *mqtt_up_topic = NULL;         // MQTT上行主题
 static const char *mqtt_down_topic = NULL;
 static gateway_serial_tx_queue_t *mqtt_tx_queue; // 串口发送队列，承接 MQTT 下行指令。
+static const char *mqtt_username;
+static const char *mqtt_password;
+static const char *mqtt_tls_ca_file;
+static int mqtt_tls_enabled;
 
 /**
  * @brief 同步发布 MQTT 上行消息
@@ -53,6 +57,20 @@ static int gateway_mqtt_publish_up(const gateway_message_t *message);
 static void *mqtt_up_publish_worker(void *arg);
 
 static int mqtt_up_publisher_stop(void);
+
+static void mqtt_apply_connect_security(MQTTClient_connectOptions *options,
+                                        MQTTClient_SSLOptions *ssl_options)
+{
+    options->username = mqtt_username;
+    options->password = mqtt_password;
+
+    if (mqtt_tls_enabled)
+    {
+        ssl_options->trustStore = mqtt_tls_ca_file;
+        ssl_options->enableServerCertAuth = 1;
+        options->ssl = ssl_options;
+    }
+}
 
 /**
  * @brief MQTT连接回调函数
@@ -206,10 +224,20 @@ int gateway_mqtt_start(const gateway_mqtt_config_t *config)
         return -1;
     }
 
+    mqtt_tls_enabled = strncmp(config->broker_address, "ssl://", 6) == 0;
+    if (!mqtt_tls_enabled &&
+        (config->username != NULL || config->password != NULL))
+    {
+        fprintf(stderr, "MQTT认证信息要求使用 ssl:// TLS 地址\n");
+        return -1;
+    }
     mqtt_serial_fd = config->serial_fd;
     mqtt_up_topic = config->up_topic;
     mqtt_down_topic = config->topic;
     mqtt_tx_queue = config->tx_queue;
+    mqtt_username = config->username;
+    mqtt_password = config->password;
+    mqtt_tls_ca_file = config->tls_ca_file;
 
     int status = MQTTClient_create(&mqtt_client,
                                    config->broker_address,
@@ -237,10 +265,12 @@ int gateway_mqtt_start(const gateway_mqtt_config_t *config)
     }
 
     MQTTClient_connectOptions options = MQTTClient_connectOptions_initializer;
+    MQTTClient_SSLOptions ssl_options = MQTTClient_SSLOptions_initializer;
 
     options.keepAliveInterval = 20; // 设置MQTT的心跳保活时间
     options.cleansession = 1;       // 设置MQTT的清理会话选项
 
+    mqtt_apply_connect_security(&options, &ssl_options);
     status = MQTTClient_connect(mqtt_client, &options);
 
     if (status != MQTTCLIENT_SUCCESS)
@@ -395,10 +425,12 @@ static int mqtt_up_is_stopping(mqtt_up_queue_t *queue)
 static int mqtt_up_reconnect(void)
 {
     MQTTClient_connectOptions options = MQTTClient_connectOptions_initializer;
+    MQTTClient_SSLOptions ssl_options = MQTTClient_SSLOptions_initializer;
     options.keepAliveInterval = 20;
     options.cleansession = 1;
     options.connectTimeout = 3;
 
+    mqtt_apply_connect_security(&options, &ssl_options);
     int status = MQTTClient_connect(mqtt_client, &options);
     if (status != MQTTCLIENT_SUCCESS)
     {

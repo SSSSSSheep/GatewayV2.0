@@ -6,10 +6,10 @@ RK_BUILD_DIR := build/rk3568-aarch64-sysroot
 TOOLCHAIN_FILE := cmake/aarch64-toolchain.cmake
 SYSROOT := $(HOME)/toolchains/rk3568-sysroot-clean
 PAHO_INCLUDE_DIR := $(SYSROOT)/usr/local/include
-PAHO_LIBRARY := $(SYSROOT)/usr/local/lib/libpaho-mqtt3c.so.1.3.13
+PAHO_LIBRARY := $(SYSROOT)/usr/local/lib/libpaho-mqtt3cs.so.1.3.13
 RK_LINKER_FLAGS := -L$(SYSROOT)/usr/lib/aarch64-linux-gnu -L$(SYSROOT)/lib/aarch64-linux-gnu -Wl,-rpath-link,$(SYSROOT)/lib/aarch64-linux-gnu
 
-RK_HOST ?= cat@192.168.0.105
+RK_HOST ?= cat@192.168.0.107
 RK_BINARY := /tmp/main_demo
 RK_SERIAL_LINK := /tmp/rk_gateway
 RK_SERIAL_DEVICE := /dev/ttyS3

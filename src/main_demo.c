@@ -105,6 +105,12 @@ int main(void)
     if (down_topic == NULL || down_topic[0] == 0) down_topic = "gateway/down";
     const char *up_topic = getenv("GATEWAY_MQTT_UP_TOPIC");
     if (up_topic == NULL || up_topic[0] == 0) up_topic = "gateway/up";
+    const char *mqtt_username = getenv("GATEWAY_MQTT_USERNAME");
+    if (mqtt_username != NULL && mqtt_username[0] == 0) mqtt_username = NULL;
+    const char *mqtt_password = getenv("GATEWAY_MQTT_PASSWORD");
+    if (mqtt_password != NULL && mqtt_password[0] == 0) mqtt_password = NULL;
+    const char *mqtt_ca_file = getenv("GATEWAY_MQTT_CA_FILE");
+    if (mqtt_ca_file != NULL && mqtt_ca_file[0] == 0) mqtt_ca_file = NULL;
 
     printf("=== 4. 打开串口 ===\n");
     printf("设备：%s，115200 8N1\n", serial_path);
@@ -130,6 +136,9 @@ int main(void)
         .client_id = client_id,
         .topic = down_topic,
         .up_topic = up_topic,
+        .username = mqtt_username,
+        .password = mqtt_password,
+        .tls_ca_file = mqtt_ca_file,
         .tx_queue = &tx_queue,
         .serial_fd = fd};
 
