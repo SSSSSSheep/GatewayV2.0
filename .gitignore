@@ -1,7 +1,45 @@
-/build/
-/build-*/
+# ==========================================
+# 1. Linux 网关通用忽略
+# ==========================================
+build/
+build-*/
 *.o
 *.a
 *.so
-core
 core.*
+
+# ==========================================
+# 2. STM32CubeMX / Keil MDK 专属忽略（极其重要！）
+# ==========================================
+# Keil 编译生成的中间文件和目标文件夹
+node_stm32/MDK-ARM/Objects/
+node_stm32/MDK-ARM/Listings/
+node_stm32/MDK-ARM/DebugConfig/
+node_stm32/MDK-ARM/RTE/
+*.o
+*.d
+*.axf
+*.hex
+*.bin
+*.map
+*.htm
+*.lnp
+*.dep
+*.crf
+*.scvd
+*.uvguix.*
+JLinkLog.txt
+
+# STM32CubeIDE 生成的中间文件
+node_stm32/Debug/
+node_stm32/Release/
+node_stm32/.settings/
+node_stm32/.cproject
+node_stm32/.project
+
+# ==========================================
+# 3. 系统与编辑器配置
+# ==========================================
+.vscode/
+.DS_Store
+Thumbs.db
