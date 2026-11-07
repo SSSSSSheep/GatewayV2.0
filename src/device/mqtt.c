@@ -1,3 +1,8 @@
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+
+#endif // !_POSIX_C_SOURCE
+
 #include "gateway/mqtt.h"
 #include "gateway/jdy_at.h"
 #include "gateway/message_json.h"
@@ -9,6 +14,9 @@
 #include <unistd.h>
 #include <errno.h>
 #include <pthread.h>
+#include <stdarg.h>
+#include <stdatomic.h>
+#include <time.h>
 
 #define GATEWAY_MQTT_QOS 0                 // QoS：0 至多一次，1 至少一次，2 恰好一次。
 #define GATEWAY_MQTT_TIMEOUT_MS 10000L     // MQTTClient_disconnect() 的等待时间，单位为毫秒。
@@ -34,13 +42,55 @@ static MQTTClient mqtt_client;  // MQTT客户端句柄
 static int mqtt_serial_fd = -1; // 串口文件描述符
 static int mqtt_started = 0;    // MQTT是否已经启动
 
-static const char *mqtt_up_topic = NULL;         // MQTT上行主题
+static const char *mqtt_up_topic = NULL; // MQTT上行主题
 static const char *mqtt_down_topic = NULL;
 static gateway_serial_tx_queue_t *mqtt_tx_queue; // 串口发送队列，承接 MQTT 下行指令。
 static const char *mqtt_username;
 static const char *mqtt_password;
 static const char *mqtt_tls_ca_file;
 static int mqtt_tls_enabled;
+static atomic_llong mqtt_callback_log_second = ATOMIC_VAR_INIT(-1);
+static atomic_uint mqtt_callback_suppressed_logs = ATOMIC_VAR_INIT(0U);
+
+static void mqtt_log_callback_error(const char *format, ...)
+{
+    struct timespec now;
+    long long second;
+    long long previous;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+    {
+        return;
+    }
+
+    second = (long long)now.tv_sec;
+    previous = atomic_load_explicit(&mqtt_callback_log_second, memory_order_relaxed);
+    if (previous == second ||
+        !atomic_compare_exchange_strong_explicit(
+            &mqtt_callback_log_second,
+            &previous,
+            second,
+            memory_order_relaxed,
+            memory_order_relaxed))
+    {
+        atomic_fetch_add_explicit(&mqtt_callback_suppressed_logs, 1U, memory_order_relaxed);
+        return;
+    }
+
+    unsigned int suppressed = atomic_exchange_explicit(
+        &mqtt_callback_suppressed_logs,
+        0U,
+        memory_order_relaxed);
+    if (suppressed > 0U)
+    {
+        fprintf(stderr, "MQTT回调此前合并 %u 条重复错误日志\n", suppressed);
+    }
+
+    va_list args;
+    va_start(args, format);
+    vfprintf(stderr, format, args);
+    va_end(args);
+}
 
 /**
  * @brief 同步发布 MQTT 上行消息
@@ -100,15 +150,9 @@ static int mqtt_message_arrived(void *context, char *topic_name, int topic_len, 
 
     if (message == NULL)
     {
-        fprintf(stderr, "MQTT message is NULL\n");
+        mqtt_log_callback_error("MQTT消息为空\n");
         return -1;
     }
-
-    printf("MQTT收到主题：%s\n",
-           topic_name != NULL ? topic_name : "(未知)");
-    printf("MQTT收到JSON：%.*s\n",
-           message->payloadlen,
-           (const char *)message->payload);
 
     gateway_message_t decoded = {0};
 
@@ -116,7 +160,7 @@ static int mqtt_message_arrived(void *context, char *topic_name, int topic_len, 
 
     if (json_status != MESSAGE_JSON_OK)
     {
-        fprintf(stderr, "MQTT JSON解码失败：%d\n", json_status);
+        mqtt_log_callback_error("MQTT JSON解码失败：%d\n", json_status);
         MQTTClient_freeMessage(&message);
         MQTTClient_free(topic_name);
         return -1;
@@ -129,40 +173,32 @@ static int mqtt_message_arrived(void *context, char *topic_name, int topic_len, 
 
     if (at_status != JDY_AT_OK)
     {
-        fprintf(stderr, "JDY组包失败，错误码：%d\n", at_status);
+        mqtt_log_callback_error("JDY组帧失败，错误码：%d\n", at_status);
         MQTTClient_freeMessage(&message);
         MQTTClient_free(topic_name);
         return 1;
     }
 
-    printf("准备发送串口，长度：%zu\n,HEX:", packet_len);
-
-    for (size_t i = 0; i < packet_len; i++)
-    {
-        printf("%02X ", (unsigned int)packet[i]);
-    }
-
-    printf("\n");
-
     if (mqtt_serial_fd < 0)
     {
-        fprintf(stderr, "串口未打开\n");
+        mqtt_log_callback_error("串口未打开\n");
         MQTTClient_freeMessage(&message);
         MQTTClient_free(topic_name);
         return 1;
     }
 
     // MQTT 回调只投递数据，由 IO 循环统一写串口，避免回调直接操作串口。
-    if (gateway_serial_tx_queue_push(
-            mqtt_tx_queue,
-            packet,
-            packet_len) != 0)
+    int queue_status = gateway_serial_tx_queue_push(
+        mqtt_tx_queue,
+        packet,
+        packet_len);
+    if (queue_status == GATEWAY_SERIAL_TX_QUEUE_PUSH_REJECTED)
     {
-        fprintf(stderr, "串口发送队列写入失败：%s\n", strerror(errno));
+        mqtt_log_callback_error("串口发送队列写入失败：%s\n", strerror(errno));
     }
-    else
+    else if (queue_status == GATEWAY_SERIAL_TX_QUEUE_PUSH_NOTIFY_ERROR)
     {
-        printf("串口帧已加入发送队列\n");
+        mqtt_log_callback_error("串口帧已入队，但 eventfd 通知失败：%s\n", strerror(errno));
     }
     MQTTClient_freeMessage(&message);
     MQTTClient_free(topic_name);
@@ -315,19 +351,20 @@ int gateway_mqtt_enqueue_up(const gateway_message_t *message)
         return -1;
     }
 
-    /* 入队发生在 epoll 线程，锁忙时立即拒收，不能在这里等待发布线程。 */
-    int result = pthread_mutex_trylock(&queue->mutex);
+    /* 锁内只检查状态、复制消息并通知消费者，不执行网络操作。 */
+    int result = pthread_mutex_lock(&queue->mutex);
     if (result != 0)
     {
-        errno = (result == EBUSY) ? EAGAIN : result;
+        errno = result;
         return -1;
     }
 
     /* 队列已停止或已满时拒收新消息，不覆盖已排队的温度数据。 */
     if (queue->stopping || queue->count >= GATEWAY_MQTT_UP_QUEUE_CAPACITY)
     {
+        int error = queue->stopping ? ECANCELED : ENOSPC;
         pthread_mutex_unlock(&queue->mutex);
-        errno = queue->stopping ? ECANCELED : ENOSPC;
+        errno = error;
         return -1;
     }
 
@@ -405,7 +442,6 @@ static int gateway_mqtt_publish_up(const gateway_message_t *message)
         return status;
     }
 
-    printf("MQTT 上行发布：%.*s\n", (int)json_len, json);
     return 0;
 }
 

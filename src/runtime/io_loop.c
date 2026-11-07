@@ -16,10 +16,13 @@
 #include <sys/epoll.h>
 #include <signal.h>
 #include <sys/signalfd.h>
+#include <time.h>
 #include <unistd.h>
 
 #define IO_LOOP_MAX_EVENTS 3
 #define IO_LOOP_READ_SIZE 128
+#define IO_LOOP_TX_FRAME_BUDGET 4U
+#define IO_LOOP_EPOLL_TIMEOUT_MS 100
 
 typedef struct io_loop_ctx io_loop_ctx_t;
 
@@ -52,6 +55,36 @@ struct io_loop_ctx
     io_loop_watch_t notify_watch;
     io_loop_watch_t signal_watch;
 };
+
+static void io_log_rate_limited(const char *message)
+{
+    static struct timespec last_log = {0};
+    static unsigned int suppressed = 0U;
+    struct timespec now;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+    {
+        return;
+    }
+
+    if (last_log.tv_sec != 0 && now.tv_sec == last_log.tv_sec)
+    {
+        suppressed++;
+        return;
+    }
+
+    if (suppressed > 0U)
+    {
+        fprintf(stderr, "%s（此前合并 %u 条重复日志）\n", message, suppressed);
+    }
+    else
+    {
+        fprintf(stderr, "%s\n", message);
+    }
+
+    last_log = now;
+    suppressed = 0U;
+}
 
 /**
  * @brief 尝试继续写入当前串口帧
@@ -133,101 +166,89 @@ static int update_serial_events(io_loop_ctx_t *ctx, uint32_t events)
  */
 static int process_serial_input(io_loop_ctx_t *ctx)
 {
+    uint8_t read_buffer[IO_LOOP_READ_SIZE];
+    ssize_t read_len;
+
+    do
+    {
+        read_len = read(ctx->serial_fd, read_buffer, sizeof(read_buffer));
+    } while (read_len < 0 && errno == EINTR);
+
+    if (read_len < 0)
+    {
+        if (errno == EAGAIN || errno == EWOULDBLOCK)
+        {
+            // 当前内核接收缓冲已读空，回到 epoll 等下一批字节。
+            return 0;
+        }
+
+        perror("read failed");
+        return -1;
+    }
+
+    if (read_len == 0)
+    {
+        return 0;
+    }
+
+    jdy_parser_status_t feed_status = parser_feed(
+        &ctx->parser,
+        read_buffer,
+        (size_t)read_len);
+
+    if (feed_status != JDY_PARSER_OK)
+    {
+        fprintf(stderr, "解析器输入缓存无法接收数据，状态码：%d\n",
+                feed_status);
+        return -1;
+    }
+
     while (1)
     {
-        uint8_t read_buffer[IO_LOOP_READ_SIZE];
-        ssize_t read_len = read(
-            ctx->serial_fd,
-            read_buffer,
-            sizeof(read_buffer));
+        jdy_frame_t frame;
+        jdy_parser_status_t parse_status = parser_next(&ctx->parser, &frame);
 
-        if (read_len < 0)
+        if (parse_status == JDY_PARSER_OK)
         {
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
-            {
-                // 当前内核接收缓冲已读空，回到 epoll 等下一批字节。
-                return 0;
-            }
+            gateway_message_t message = {0};
+            const size_t message_header_len = JDY_ADDRESS_SIZE + 1U;
 
-            if (errno == EINTR)
+            message.conn_type = 1;
+            memcpy(message.id, frame.source, JDY_ADDRESS_SIZE);
+
+            // 先核对帧内地址和长度字段，再复制消息体，避免格式错误导致越界读取。
+            if (frame.payload_len <= message_header_len ||
+                memcmp(frame.payload, frame.source,
+                       JDY_ADDRESS_SIZE) != 0 ||
+                (size_t)frame.payload[JDY_ADDRESS_SIZE] !=
+                    frame.payload_len - message_header_len ||
+                frame.payload_len - message_header_len >
+                    sizeof(message.msg))
             {
-                // 读取被信号打断，不丢弃解析状态，继续尝试。
+                io_log_rate_limited("STM32消息格式错误");
                 continue;
             }
 
-            perror("read failed");
-            return -1;
+            message.msg_len = frame.payload_len - message_header_len;
+            memcpy(message.msg, frame.payload + message_header_len, message.msg_len);
+            /* IO 线程只入队，不在 epoll 回调里等待 MQTT 网络发布。 */
+            if (gateway_mqtt_enqueue_up(&message) != 0)
+            {
+                char error_message[128];
+                snprintf(error_message, sizeof(error_message),
+                         "MQTT上行队列拒收消息：%s", strerror(errno));
+                io_log_rate_limited(error_message);
+            }
+            continue;
         }
 
-        if (read_len == 0)
+        if (parse_status == JDY_PARSER_NEED_MORE)
         {
             return 0;
         }
 
-
-        jdy_parser_status_t feed_status = parser_feed(
-            &ctx->parser,
-            read_buffer,
-            (size_t)read_len);
-
-        if (feed_status != JDY_PARSER_OK)
-        {
-            fprintf(stderr, "解析器输入缓存无法接收数据，状态码：%d\n",
-                    feed_status);
-            return -1;
-        }
-
-        while (1)
-        {
-            jdy_frame_t frame;
-            jdy_parser_status_t parse_status =
-                parser_next(&ctx->parser, &frame);
-
-            if (parse_status == JDY_PARSER_OK)
-            {
-                gateway_message_t message = {0};
-                const size_t message_header_len = JDY_ADDRESS_SIZE + 1U;
-
-                message.conn_type = 1;
-                memcpy(message.id, frame.source, JDY_ADDRESS_SIZE);
-
-                // 先核对帧内地址和长度字段，再复制消息体，避免格式错误导致越界读取。
-                if (frame.payload_len <= message_header_len ||
-                    memcmp(frame.payload, frame.source,
-                           JDY_ADDRESS_SIZE) != 0 ||
-                    (size_t)frame.payload[JDY_ADDRESS_SIZE] !=
-                        frame.payload_len - message_header_len ||
-                    frame.payload_len - message_header_len >
-                        sizeof(message.msg))
-                {
-                    fprintf(stderr, "STM32消息格式错误\n");
-                    continue;
-                }
-
-                message.msg_len =
-                    frame.payload_len - message_header_len;
-                memcpy(
-                    message.msg,
-                    frame.payload + message_header_len,
-                    message.msg_len);
-                /* IO 线程只入队，不在 epoll 回调里等待 MQTT 网络发布。 */
-                if (gateway_mqtt_enqueue_up(&message) != 0)
-                {
-                    fprintf(stderr, "MQTT上行队列拒收消息：%s\n", strerror(errno));
-                }
-                printf("成功解析出一帧！消息体长度: %zu\n",
-                       message.msg_len);
-                continue;
-            }
-
-            if (parse_status == JDY_PARSER_NEED_MORE)
-            {
-                break;
-            }
-
-            fprintf(stderr, "帧解析失败，状态码: %d\n", parse_status);
-            return -1;
-        }
+        fprintf(stderr, "帧解析失败，状态码: %d\n", parse_status);
+        return -1;
     }
 }
 
@@ -276,6 +297,8 @@ static int consume_tx_notification(io_loop_ctx_t *ctx)
  */
 static int process_tx_queue(io_loop_ctx_t *ctx)
 {
+    size_t completed_frames = 0U;
+
     while (1)
     {
         if (ctx->pending_valid == 0)
@@ -322,10 +345,6 @@ static int process_tx_queue(io_loop_ctx_t *ctx)
             return 0;
         }
 
-        printf("串口写入：%zu/%zu 字节\n",
-               ctx->pending_offset,
-               ctx->pending_item.len);
-
         if (update_serial_events(ctx, EPOLLIN) < 0)
         {
             perror("关闭串口EPOLLOUT监听失败");
@@ -334,6 +353,16 @@ static int process_tx_queue(io_loop_ctx_t *ctx)
 
         ctx->pending_offset = 0U;
         ctx->pending_valid = 0;
+        completed_frames++;
+
+        if (completed_frames >= IO_LOOP_TX_FRAME_BUDGET)
+        {
+            if (gateway_serial_tx_queue_notify(ctx->tx_queue) != 0)
+            {
+                io_log_rate_limited("串口发送队列通知失败，将由定时检查继续处理");
+            }
+            return 0;
+        }
     }
 }
 
@@ -480,7 +509,7 @@ int io_loop_run(int serial_fd, gateway_serial_tx_queue_t *tx_queue)
             ctx.epoll_fd,
             events,
             IO_LOOP_MAX_EVENTS,
-            -1);
+            IO_LOOP_EPOLL_TIMEOUT_MS);
 
         if (event_count < 0)
         {
@@ -494,6 +523,17 @@ int io_loop_run(int serial_fd, gateway_serial_tx_queue_t *tx_queue)
         if (ctx.signal_fd >= 0) close(ctx.signal_fd);
         close(ctx.epoll_fd);
             return -1;
+        }
+
+        if (event_count == 0)
+        {
+            if (process_tx_queue(&ctx) != 0)
+            {
+                close(ctx.signal_fd);
+                close(ctx.epoll_fd);
+                return -1;
+            }
+            continue;
         }
 
         for (int event_index = 0;

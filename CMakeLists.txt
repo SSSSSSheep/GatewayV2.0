@@ -291,6 +291,32 @@ else()
     target_link_libraries(gateway_device PUBLIC Threads::Threads)
 endif()
 
+if(NOT CMAKE_CROSSCOMPILING)
+    add_executable(
+        test_serial_tx_queue
+        tests/unit/test_serial_tx_queue.c
+        src/device/serial_tx_queue.c
+    )
+
+    target_include_directories(
+        test_serial_tx_queue
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+
+    target_link_libraries(
+        test_serial_tx_queue
+        PRIVATE
+            gateway_build_options
+            Threads::Threads
+    )
+
+    add_test(
+        NAME serial_tx_queue
+        COMMAND test_serial_tx_queue
+    )
+endif()
+
 add_executable(
     test_message_json_encode
     tests/unit/test_message_json_encode.c

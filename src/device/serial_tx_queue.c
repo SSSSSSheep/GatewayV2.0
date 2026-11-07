@@ -62,23 +62,51 @@ int gateway_serial_tx_queue_fd(const gateway_serial_tx_queue_t *queue)
     return queue->notify_fd;
 }
 
-int gateway_serial_tx_queue_push(gateway_serial_tx_queue_t *queue, const uint8_t *data, size_t len)
+int gateway_serial_tx_queue_notify(gateway_serial_tx_queue_t *queue)
 {
     uint64_t notification = 1;
     ssize_t written;
+
+    if (queue == NULL || queue->notify_fd < 0)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    do
+    {
+        written = write(queue->notify_fd, &notification, sizeof(notification));
+    } while (written < 0 && errno == EINTR);
+
+    if (written == (ssize_t)sizeof(notification) ||
+        (written < 0 && errno == EAGAIN))
+    {
+        return 0;
+    }
+
+    if (written >= 0)
+    {
+        errno = EIO;
+    }
+
+    return -1;
+}
+
+int gateway_serial_tx_queue_push(gateway_serial_tx_queue_t *queue, const uint8_t *data, size_t len)
+{
     int result;
 
     if (queue == NULL || data == NULL || len == 0U || len > GATEWAY_TX_FRAME_MAX_SIZE)
     {
         errno = EINVAL;
-        return -1;
+        return GATEWAY_SERIAL_TX_QUEUE_PUSH_REJECTED;
     }
 
     result = pthread_mutex_lock(&queue->mutex);
     if (result != 0)
     {
         errno = result;
-        return -1;
+        return GATEWAY_SERIAL_TX_QUEUE_PUSH_REJECTED;
     }
 
     if (queue->count == GATEWAY_TX_QUEUE_CAPACITY)
@@ -86,7 +114,7 @@ int gateway_serial_tx_queue_push(gateway_serial_tx_queue_t *queue, const uint8_t
         // 队列满时不覆盖旧帧，也不把新帧算作已入队。
         pthread_mutex_unlock(&queue->mutex);
         errno = ENOSPC;
-        return -1;
+        return GATEWAY_SERIAL_TX_QUEUE_PUSH_REJECTED;
     }
 
     memcpy(queue->items[queue->tail].data, data, len);
@@ -94,24 +122,14 @@ int gateway_serial_tx_queue_push(gateway_serial_tx_queue_t *queue, const uint8_t
     queue->tail = (queue->tail + 1) % GATEWAY_TX_QUEUE_CAPACITY;
     queue->count++;
 
-    do
-    {
-        written = write(queue->notify_fd, &notification, sizeof(notification));
-    } while (written < 0 && errno == EINTR); // 信号打断 eventfd 写入时重试。
+    pthread_mutex_unlock(&queue->mutex);
 
-    // 计数器已满时 eventfd 返回 EAGAIN，但通知 fd 仍可读，不必撤销队列项。
-    if (written < 0 && errno != EAGAIN)
+    // 队列状态先提交，再唤醒消费者，避免在持锁时执行系统调用。
+    if (gateway_serial_tx_queue_notify(queue) != 0)
     {
-        result = errno;
-        queue->tail = (queue->tail + GATEWAY_TX_QUEUE_CAPACITY - 1U) % GATEWAY_TX_QUEUE_CAPACITY;
-        queue->count--;
-        pthread_mutex_unlock(&queue->mutex);
-
-        errno = result;
-        return -1;
+        return GATEWAY_SERIAL_TX_QUEUE_PUSH_NOTIFY_ERROR;
     }
 
-    pthread_mutex_unlock(&queue->mutex);
     return 0;
 }
 

@@ -24,6 +24,13 @@ typedef struct
     gateway_tx_item_t items[GATEWAY_TX_QUEUE_CAPACITY];
 } gateway_serial_tx_queue_t;
 
+typedef enum
+{
+    GATEWAY_SERIAL_TX_QUEUE_PUSH_OK = 0,
+    GATEWAY_SERIAL_TX_QUEUE_PUSH_REJECTED = -1,
+    GATEWAY_SERIAL_TX_QUEUE_PUSH_NOTIFY_ERROR = -2
+} gateway_serial_tx_queue_push_status_t;
+
 /**
  * @brief 初始化串口发送队列和 eventfd 通知描述符
  * @param queue 待初始化的队列
@@ -45,11 +52,18 @@ void gateway_serial_tx_queue_destroy(gateway_serial_tx_queue_t *queue);
 int gateway_serial_tx_queue_fd(const gateway_serial_tx_queue_t *queue);
 
 /**
+ * @brief 通知 IO 循环检查发送队列
+ * @param queue 串口发送队列
+ * @return 成功返回0；失败返回-1并设置 errno
+ */
+int gateway_serial_tx_queue_notify(gateway_serial_tx_queue_t *queue);
+
+/**
  * @brief 将一帧复制到发送队列并通知 IO 循环
  * @param queue 串口发送队列
  * @param data 待发送帧
  * @param len 帧长度
- * @return 成功返回0；失败返回-1，队列已满时 errno 为 ENOSPC
+ * @return 通知成功返回0；未入队返回-1；已入队但通知失败返回-2
  */
 int gateway_serial_tx_queue_push(gateway_serial_tx_queue_t *queue, const uint8_t *data, size_t len);
 
