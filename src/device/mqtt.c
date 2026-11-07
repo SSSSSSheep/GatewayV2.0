@@ -141,7 +141,7 @@ static void mqtt_connection_lost(void *context, char *cause)
  * @param topic_name 主题名称
  * @param topic_len 主题长度
  * @param message MQTT消息
- * @return 1 表示消息已消费并由本回调释放；0 表示暂未消费、由 Paho 保留重试；错误分支还会返回 -1，其语义需按当前 Paho 版本确认。
+ * @return 返回1表示已消费或已拒收，本回调负责释放消息和主题。
  */
 static int mqtt_message_arrived(void *context, char *topic_name, int topic_len, MQTTClient_message *message)
 {
@@ -151,7 +151,26 @@ static int mqtt_message_arrived(void *context, char *topic_name, int topic_len, 
     if (message == NULL)
     {
         mqtt_log_callback_error("MQTT消息为空\n");
-        return -1;
+        MQTTClient_free(topic_name);
+        return 1;
+    }
+
+    // 重订阅收到的历史保留指令不得再次执行。
+    if (message->retained)
+    {
+        mqtt_log_callback_error("已拒收历史保留指令\n");
+        MQTTClient_freeMessage(&message);
+        MQTTClient_free(topic_name);
+        return 1;
+    }
+
+    if (message->payload == NULL || message->payloadlen <= 0 ||
+        (size_t)message->payloadlen > GATEWAY_MAX_JSON_SIZE)
+    {
+        mqtt_log_callback_error("MQTT下行消息体长度无效\n");
+        MQTTClient_freeMessage(&message);
+        MQTTClient_free(topic_name);
+        return 1;
     }
 
     gateway_message_t decoded = {0};
@@ -163,7 +182,7 @@ static int mqtt_message_arrived(void *context, char *topic_name, int topic_len, 
         mqtt_log_callback_error("MQTT JSON解码失败：%d\n", json_status);
         MQTTClient_freeMessage(&message);
         MQTTClient_free(topic_name);
-        return -1;
+        return 1;
     }
 
     uint8_t packet[JDY_AT_MAX_SIZE] = {0};

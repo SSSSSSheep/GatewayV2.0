@@ -211,7 +211,12 @@ add_test(
 target_sources(gateway_protocol
     PRIVATE
         src/protocol/jdy_parser.c
+        src/protocol/jdy_message.c
 )
+
+add_executable(test_jdy_message tests/unit/test_jdy_message.c)
+target_link_libraries(test_jdy_message PRIVATE gateway_protocol)
+add_test(NAME jdy_message COMMAND test_jdy_message)
 
 add_executable(test_jdy_parser
     tests/unit/test_jdy_parser.c

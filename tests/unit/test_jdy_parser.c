@@ -171,6 +171,88 @@ static int test_frame_header_bytes_inside_payload(void)
     return 0;
 }
 
+static int test_timeout_and_clock_wrap(void)
+{
+    static const uint8_t half[] = {0xF1, 0xDD, 0x10, 0x00, 0x02};
+    static const uint8_t complete[] = {
+        0xF1, 0xDD, 0x08, 0x00, 0x02, 0x01, 0x01,
+        0x00, 0x02, 0x01, 0x31};
+    jdy_parser_t parser;
+    jdy_frame_t frame;
+    CHECK(parser_init(&parser) == JDY_PARSER_OK);
+    CHECK(parser_tick(&parser, 100U) == 0);
+    CHECK(parser_feed(&parser, half, sizeof(half)) == JDY_PARSER_OK);
+    CHECK(parser_next(&parser, &frame) == JDY_PARSER_NEED_MORE);
+    CHECK(parser_tick(&parser, 300U) == 0);
+    CHECK(parser_feed(&parser, half + 3, 1) == JDY_PARSER_OK);
+    CHECK(parser_next(&parser, &frame) == JDY_PARSER_NEED_MORE);
+    CHECK(parser_tick(&parser, 599U) == 0);
+    CHECK(parser.state == JDY_STATE_RECEIVE_BODY);
+    CHECK(parser_tick(&parser, 600U) == 1);
+    CHECK(parser.state == JDY_STATE_WAIT_F1 && parser.body_received == 0);
+    CHECK(parser_feed(&parser, complete, sizeof(complete)) == JDY_PARSER_OK);
+    CHECK(parser_next(&parser, &frame) == JDY_PARSER_OK);
+    CHECK(frame.payload_len == 4 && frame.payload[3] == 0x31);
+
+    CHECK(parser_tick(&parser, UINT32_MAX - 100U) == 0);
+    CHECK(parser_feed(&parser, half, sizeof(half)) == JDY_PARSER_OK);
+    CHECK(parser_next(&parser, &frame) == JDY_PARSER_NEED_MORE);
+    CHECK(parser_tick(&parser, 398U) == 0);
+    CHECK(parser_tick(&parser, 399U) == 1);
+
+    // 半个帧头也有期限；不能只处理已经读到长度的半帧。
+    CHECK(parser_feed(&parser, half, 1) == JDY_PARSER_OK);
+    CHECK(parser_next(&parser, &frame) == JDY_PARSER_NEED_MORE);
+    CHECK(parser_tick(&parser, 899U) == 1);
+    CHECK(parser_feed(&parser, half, 2) == JDY_PARSER_OK);
+    CHECK(parser_next(&parser, &frame) == JDY_PARSER_NEED_MORE);
+    CHECK(parser_tick(&parser, 1399U) == 1);
+    CHECK(parser_tick(NULL, 0) == -1);
+    return 0;
+}
+
+static int test_ring_wrap_and_atomic_rejection(void)
+{
+    uint8_t noise[JDY_PARSER_BUFFER_SIZE];
+    static const uint8_t complete[] = {
+        0xF1, 0xDD, 0x05, 0x00, 0x02, 0x01, 0x01, 0x31};
+    jdy_parser_t parser;
+    jdy_frame_t frame;
+    memset(noise, 0x55, sizeof(noise));
+    CHECK(parser_init(&parser) == JDY_PARSER_OK);
+    CHECK(parser_feed(&parser, noise, 253) == JDY_PARSER_OK);
+    CHECK(parser_next(&parser, &frame) == JDY_PARSER_NEED_MORE);
+    CHECK(parser_feed(&parser, complete, sizeof(complete)) == JDY_PARSER_OK);
+    CHECK(parser_next(&parser, &frame) == JDY_PARSER_OK);
+    CHECK(frame.payload_len == 1 && frame.payload[0] == 0x31);
+    CHECK(parser.read_pos == 5 && parser.write_pos == 5);
+
+    CHECK(parser_feed(&parser, noise, sizeof(noise)) == JDY_PARSER_OK);
+    jdy_parser_t before = parser;
+    CHECK(parser_feed(&parser, complete, sizeof(complete)) == JDY_PARSER_ERR_NO_SPACE);
+    CHECK(memcmp(&before, &parser, sizeof(parser)) == 0);
+    CHECK(parser_next(&parser, &frame) == JDY_PARSER_NEED_MORE);
+    CHECK(parser_feed(&parser, complete, sizeof(complete)) == JDY_PARSER_OK);
+    CHECK(parser_next(&parser, &frame) == JDY_PARSER_OK);
+    return 0;
+}
+
+static int test_invalid_lengths_and_maximum(void)
+{
+    static const uint8_t input[] = {
+        0xF1, 0xDD, 0x04, 0xF1, 0xDD, 0x11,
+        0xF1, 0xDD, 0x10, 0x00, 0x02, 0x01, 0x01,
+        0x00, 0x02, 0x09, 0, 1, 2, 3, 4, 5, 6, 7, 8};
+    jdy_parser_t parser;
+    jdy_frame_t frame;
+    CHECK(parser_init(&parser) == JDY_PARSER_OK);
+    CHECK(parser_feed(&parser, input, sizeof(input)) == JDY_PARSER_OK);
+    CHECK(parser_next(&parser, &frame) == JDY_PARSER_OK);
+    CHECK(frame.payload_len == 12 && frame.payload[2] == 9 && frame.payload[11] == 8);
+    CHECK(parser_next(&parser, &frame) == JDY_PARSER_NEED_MORE);
+    return 0;
+}
+
 int main(void)
 {
     CHECK(test_complete_frame() == 0);
@@ -178,6 +260,9 @@ int main(void)
     CHECK(test_noise_before_frame() == 0);
     CHECK(test_two_concatenated_frames() == 0);
     CHECK(test_frame_header_bytes_inside_payload() == 0);
+    CHECK(test_timeout_and_clock_wrap() == 0);
+    CHECK(test_ring_wrap_and_atomic_rejection() == 0);
+    CHECK(test_invalid_lengths_and_maximum() == 0);
 
     puts("jdy_parser tests passed");
     return 0;

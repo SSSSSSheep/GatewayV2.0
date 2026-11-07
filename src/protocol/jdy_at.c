@@ -1,4 +1,5 @@
 #include "gateway/jdy_at.h"
+#include "gateway/jdy_message.h"
 
 #include <string.h>
 
@@ -68,8 +69,8 @@ jdy_at_status_t jdy_at_build(const gateway_message_t *msg,
     offset += sizeof(msg->id);
 
     /* 这是当前网关协议约定的源地址。 */
-    out[offset++] = 0x01;
-    out[offset++] = 0x01;
+    out[offset++] = JDY_GATEWAY_ADDRESS_HIGH;
+    out[offset++] = JDY_GATEWAY_ADDRESS_LOW;
 
     out[offset++] = (uint8_t)msg->msg_len;
 

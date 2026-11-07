@@ -432,9 +432,9 @@
                 <div class="field"><label for="deviceId">设备 ID（4 位十六进制）</label><input id="deviceId" value="0002"
                         maxlength="4" pattern="[0-9a-fA-F]{4}" required></div>
                 <div class="field"><label for="messageHex">消息体（十六进制字节）</label><input id="messageHex" value="30"
-                        placeholder="例如 30 或 3132" pattern="(?:[0-9a-fA-F]{2})+" required></div>
+                        placeholder="例如 30 或 3132" pattern="(?:[0-9a-fA-F]{2}){1,9}" maxlength="18" required></div>
                 <button class="btn primary full" id="sendButton" type="submit" disabled>发送到下位机</button>
-                <p class="hint">消息体按十六进制字节发送，例如 <code>30</code> 表示 ASCII 字符 0。</p>
+                <p class="hint">消息体为 1～9 字节（2～18 位十六进制），例如 <code>30</code> 表示 ASCII 字符 0。</p>
                 <p class="form-error" id="commandError" role="alert"></p>
             </form>
         </aside>
@@ -581,13 +581,17 @@
                     $("commandError").textContent = "消息体必须由完整的十六进制字节组成。";
                     return;
                 }
+                if (hex.length > 18) {
+                    $("commandError").textContent = "消息体最多为 9 字节（18 位十六进制）。";
+                    return;
+                }
                 const payload = JSON.stringify({ conn_type: Number($("connType").value), id, msg: hex.toUpperCase() });
                 client.publish(topic, payload, { qos: 0, retain: false }, (error) => {
                     if (error) {
                         $("commandError").textContent = `发送失败：${error.message}`;
                         return;
                     }
-                    notify(`已发布到 ${topic}`);
+                    notify(`已发布到 ${topic}，尚未确认设备执行`);
                 });
             });
             $("filterInput").addEventListener("input", renderMessages);

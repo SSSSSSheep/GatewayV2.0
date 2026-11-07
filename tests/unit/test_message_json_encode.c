@@ -108,6 +108,11 @@ static int test_encode_invalid_length(void)
 
     CHECK(json_len == 99);
 
+    message.msg_len = GATEWAY_MAX_MSG_SIZE + 1U;
+    CHECK(message_json_to_encode(
+              &message, json, sizeof(json), &json_len) == MESSAGE_JSON_ERR_RANGE);
+    CHECK(json_len == 99);
+
     return 0;
 }
 

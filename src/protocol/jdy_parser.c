@@ -25,6 +25,23 @@ jdy_parser_status_t parser_init(jdy_parser_t *parser)
     return JDY_PARSER_OK;
 }
 
+int parser_tick(jdy_parser_t *parser, uint32_t now_ms)
+{
+    if (parser == NULL)
+    {
+        return -1;
+    }
+
+    parser->now_ms = now_ms;
+    if (parser->state != JDY_STATE_WAIT_F1 &&
+        (uint32_t)(now_ms - parser->frame_started_ms) >= JDY_FRAME_TIMEOUT_MS)
+    {
+        reset_frame(parser);
+        return 1;
+    }
+    return 0;
+}
+
 jdy_parser_status_t parser_feed(jdy_parser_t *parser,
                                 const uint8_t *data,
                                 size_t len)
@@ -79,6 +96,7 @@ jdy_parser_status_t parser_next(jdy_parser_t *parser,
         case JDY_STATE_WAIT_F1:
             if (byte == 0xF1)
             {
+                parser->frame_started_ms = parser->now_ms;
                 parser->state = JDY_STATE_WAIT_DD;
             }
             break;
@@ -88,7 +106,11 @@ jdy_parser_status_t parser_next(jdy_parser_t *parser,
             {
                 parser->state = JDY_STATE_WAIT_LENGTH;
             }
-            else if (byte != 0xF1)
+            else if (byte == 0xF1)
+            {
+                parser->frame_started_ms = parser->now_ms;
+            }
+            else
             {
                 parser->state = JDY_STATE_WAIT_F1; // 丢弃不匹配噪声
             }
@@ -108,6 +130,7 @@ jdy_parser_status_t parser_next(jdy_parser_t *parser,
                 parser->state = (byte == 0xF1)
                                     ? JDY_STATE_WAIT_DD
                                     : JDY_STATE_WAIT_F1;
+                parser->frame_started_ms = parser->now_ms;
             }
             break;
 

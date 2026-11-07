@@ -3,6 +3,7 @@
 #endif
 
 #include "gateway/jdy_parser.h"
+#include "gateway/jdy_message.h"
 #include "gateway/io_loop.h"
 #include "gateway/message_json.h"
 #include "gateway/mqtt.h"
@@ -84,6 +85,23 @@ static void io_log_rate_limited(const char *message)
 
     last_log = now;
     suppressed = 0U;
+}
+
+static int update_parser_clock(io_loop_ctx_t *ctx)
+{
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+    {
+        return -1;
+    }
+
+    uint32_t now_ms = (uint32_t)((uint64_t)now.tv_sec * 1000U +
+                                (uint64_t)now.tv_nsec / 1000000U);
+    if (parser_tick(&ctx->parser, now_ms) > 0)
+    {
+        io_log_rate_limited("串口半帧超时，已重置解析状态");
+    }
+    return 0;
 }
 
 /**
@@ -191,6 +209,13 @@ static int process_serial_input(io_loop_ctx_t *ctx)
         return 0;
     }
 
+    // 新字节入缓存前先处理旧半帧超时，避免把本次完整帧接到过期半帧上。
+    if (update_parser_clock(ctx) != 0)
+    {
+        perror("读取解析器时钟失败");
+        return -1;
+    }
+
     jdy_parser_status_t feed_status = parser_feed(
         &ctx->parser,
         read_buffer,
@@ -211,26 +236,15 @@ static int process_serial_input(io_loop_ctx_t *ctx)
         if (parse_status == JDY_PARSER_OK)
         {
             gateway_message_t message = {0};
-            const size_t message_header_len = JDY_ADDRESS_SIZE + 1U;
+            static const uint8_t local_address[JDY_ADDRESS_SIZE] = {
+                JDY_GATEWAY_ADDRESS_HIGH, JDY_GATEWAY_ADDRESS_LOW};
 
-            message.conn_type = 1;
-            memcpy(message.id, frame.source, JDY_ADDRESS_SIZE);
-
-            // 先核对帧内地址和长度字段，再复制消息体，避免格式错误导致越界读取。
-            if (frame.payload_len <= message_header_len ||
-                memcmp(frame.payload, frame.source,
-                       JDY_ADDRESS_SIZE) != 0 ||
-                (size_t)frame.payload[JDY_ADDRESS_SIZE] !=
-                    frame.payload_len - message_header_len ||
-                frame.payload_len - message_header_len >
-                    sizeof(message.msg))
+            if (jdy_frame_to_message(&frame, local_address, &message) != 0)
             {
-                io_log_rate_limited("STM32消息格式错误");
+                io_log_rate_limited("STM32消息地址或长度不符合协议");
                 continue;
             }
 
-            message.msg_len = frame.payload_len - message_header_len;
-            memcpy(message.msg, frame.payload + message_header_len, message.msg_len);
             /* IO 线程只入队，不在 epoll 回调里等待 MQTT 网络发布。 */
             if (gateway_mqtt_enqueue_up(&message) != 0)
             {
@@ -504,6 +518,15 @@ int io_loop_run(int serial_fd, gateway_serial_tx_queue_t *tx_queue)
 
     while (!stop_requested)
     {
+        // 即使其他描述符持续就绪，也要检查半帧期限，不能只靠epoll空闲超时。
+        if (update_parser_clock(&ctx) != 0)
+        {
+            perror("读取解析器时钟失败");
+            close(ctx.signal_fd);
+            close(ctx.epoll_fd);
+            return -1;
+        }
+
         struct epoll_event events[IO_LOOP_MAX_EVENTS];
         int event_count = epoll_wait(
             ctx.epoll_fd,

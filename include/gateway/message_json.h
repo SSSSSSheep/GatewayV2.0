@@ -4,10 +4,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "gateway/jdy_parser.h"
+
 // 设备地址长度，单位为字节。
 #define GATEWAY_ID_SIZE 2
-// 消息体最大长度，单位为字节。
-#define GATEWAY_MAX_MSG_SIZE 12
+// 扣除外层地址和内部地址、长度字段，当前帧体上限可承载9字节消息体。
+#define GATEWAY_MAX_MSG_SIZE (JDY_MAX_PAYLOAD_SIZE - JDY_ADDRESS_SIZE - 1U)
 // JSON 消息体最大长度，单位为字节。
 #define GATEWAY_MAX_JSON_SIZE 512
 
@@ -39,7 +41,7 @@ typedef enum
  * @param payload_len 实际消息体长度，不包含额外的 NUL 终止符。
  * @param out_msg 解码结果。
  * @return 只接受 conn_type、id、msg 且各出现一次；conn_type 必须为1，
- *         id 解码后为两字节，msg 解码后为1～12字节。成功时填充 out_msg，
+ *         id 解码后为两字节，msg 解码后为1～9字节。成功时填充 out_msg，
  *         失败时 out_msg 不变；返回值为 message_json_status_t。
  */
 message_json_status_t message_json_to_decode(const void *payload,

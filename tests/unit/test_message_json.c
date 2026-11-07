@@ -64,16 +64,16 @@ int main(void)
     CHECK(out.msg_len == 2);
     CHECK(out.msg[0] == 0x00 && out.msg[1] == 0xAF);
 
-    /* 最大合法消息体：12 字节 */
+    /* 最大合法消息体：9 字节，与当前串口帧体约束一致。 */
     const char maximum[] =
         "{\"conn_type\":1,\"id\":\"0002\","
-        "\"msg\":\"000102030405060708090A0B\"}";
+        "\"msg\":\"000102030405060708\"}";
 
     CHECK(message_json_to_decode(
         maximum, strlen(maximum), &out) == MESSAGE_JSON_OK);
 
     CHECK(out.msg_len == GATEWAY_MAX_MSG_SIZE);
-    CHECK(out.msg[11] == 0x0B);
+    CHECK(out.msg[8] == 0x08);
 
     /* JSON 结尾允许空白 */
     const char whitespace[] =
@@ -127,7 +127,10 @@ int main(void)
         {"{\"conn_type\":1,\"id\":\"0002\",\"msg\":\"123\"}",
          MESSAGE_JSON_ERR_HEX},
 
-        /* 超过 12 字节 */
+        /* 超过9字节，即使HEX格式合法也必须拒绝。 */
+        {"{\"conn_type\":1,\"id\":\"0002\","
+         "\"msg\":\"00010203040506070809\"}",
+         MESSAGE_JSON_ERR_RANGE},
         {"{\"conn_type\":1,\"id\":\"0002\","
          "\"msg\":\"000102030405060708090A0B0C\"}",
          MESSAGE_JSON_ERR_RANGE},

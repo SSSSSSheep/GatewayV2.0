@@ -20,6 +20,8 @@
 
 // 输入环形缓存容量，可缓存多帧数据
 #define JDY_PARSER_BUFFER_SIZE 256
+// 从候选帧头开始计时，超过此期限仍不完整就丢弃半帧。
+#define JDY_FRAME_TIMEOUT_MS 500U
 
 // 解析器状态
 typedef enum
@@ -71,6 +73,8 @@ typedef struct
     uint8_t body[JDY_MAX_BODY_SIZE]; // 当前帧体：源地址、目标地址和消息体
     size_t body_length;              // 长度字段指定的帧体总长度，不含帧头和长度字节
     size_t body_received;            // 当前帧体已接收的字节数
+    uint32_t now_ms;                 // 调用方提供的单调毫秒时钟
+    uint32_t frame_started_ms;       // 当前候选帧头的开始时间
 } jdy_parser_t;
 
 /**
@@ -79,6 +83,14 @@ typedef struct
  * @return JDY_PARSER_OK 表示成功；parser 为空时返回 JDY_PARSER_ERR_ARGUMENT。
  */
 jdy_parser_status_t parser_init(jdy_parser_t *parser);
+
+/**
+ * @brief 更新单调时钟并丢弃超时半帧，不清除尚未解析的输入缓存。
+ * @return 超时重置返回1，无超时返回0，参数无效返回-1。
+ *         接收新一批字节前及空闲期间均需调用；每批输入应及时解析完。
+ *         uint32_t 毫秒计数自然回绕，调用间隔必须小于半个计数周期。
+ */
+int parser_tick(jdy_parser_t *parser, uint32_t now_ms);
 
 /**
  * @brief 将字节追加到输入缓存，不推进状态机。
